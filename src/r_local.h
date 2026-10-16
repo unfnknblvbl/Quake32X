@@ -13,7 +13,9 @@
 #define MAXCAND     768         /* candidate faces from the BSP walk */
 #define BATCH       32          /* faces per pipeline batch */
 #define POLYWORDS   1280        /* screen polygon buffer for one batch */
+#ifndef MAXSPANS
 #define MAXSPANS    768         /* spans for one batch */
+#endif
 
 #define HASHSIZE    1024
 #define MAX_SURFSIZE (128 * 128)

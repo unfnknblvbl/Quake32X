@@ -420,6 +420,21 @@ def main():
             h = float(e['height']) if 'height' in e else (maxs[2] - mins[2] - 8)
             if 'targetname' not in e:
                 org[2] -= h
+        if cls == 'func_door':
+            # no game logic yet: show doors in their open position so the
+            # level can be explored (movedir/lip as in Quake's doors.qc)
+            ang = float(e.get('angle', '0'))
+            if ang == -1:
+                d = (0.0, 0.0, 1.0)
+            elif ang == -2:
+                d = (0.0, 0.0, -1.0)
+            else:
+                a = math.radians(ang)
+                d = (math.cos(a), math.sin(a), 0.0)
+            lip = float(e.get('lip', '8'))
+            size = [maxs[k] - mins[k] - 2 for k in range(3)]
+            dist = abs(d[0]) * size[0] + abs(d[1]) * size[1] + abs(d[2]) * size[2] - lip
+            org = [org[k] + d[k] * dist for k in range(3)]
         if 'origin' in e:
             o = [float(x) for x in e['origin'].split()]
             org = [org[i] + o[i] for i in range(3)]
