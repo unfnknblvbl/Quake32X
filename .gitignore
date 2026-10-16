@@ -3,3 +3,4 @@ hostbuild/
 data/pak0.pak
 data/*.lvl
 *.32x
+__pycache__/
