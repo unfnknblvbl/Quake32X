@@ -114,6 +114,21 @@ static inline __attribute__((always_inline)) void build_lit(
             for (v = 0; v < (1 << shift); v++) {
                 const uint8_t *src = tex + trow * tw + bcol;
                 int light = ll, step = (lr - ll) >> shift;
+#ifndef HOST
+                if (shift >= 2) {
+                    /* four texels per long write: SDRAM writes are 2 clocks
+                       per word whatever their width */
+                    uint32_t *d32 = (uint32_t *)dst;
+                    for (u = 0; u < (1 << shift); u += 4) {
+                        uint32_t a, b, c, d;
+                        a = colormap[(light & 0xFF00) + src[u]];     light += step;
+                        b = colormap[(light & 0xFF00) + src[u + 1]]; light += step;
+                        c = colormap[(light & 0xFF00) + src[u + 2]]; light += step;
+                        d = colormap[(light & 0xFF00) + src[u + 3]]; light += step;
+                        *d32++ = (a << 24) | (b << 16) | (c << 8) | d;
+                    }
+                } else
+#endif
                 for (u = 0; u < (1 << shift); u++) {
                     dst[u] = colormap[(light & 0xFF00) + src[u]];
                     light += step;

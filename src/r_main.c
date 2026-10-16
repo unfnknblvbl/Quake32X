@@ -39,7 +39,7 @@ void level_init(const void *blob)
     lvl.colormap  = L(LVL_COLORMAP);
     lvl.conchars  = L(LVL_CONCHARS);
     lvl.skytex    = L(LVL_SKYTEX);
-    lvl.facesph   = (const lsphere_t *)L(LVL_FACESPH);
+    lvl.fgeom     = (const lfgeom_t *)L(LVL_FACESPH);
     lvl.nodeparent = (const int16_t *)L(LVL_NODEPARENT);
 #undef L
     lvl.numfaces  = h->lump[LVL_FACES].count;
@@ -253,15 +253,18 @@ static void walk_bsp(rcpu_t *rc)
             side = (e >> 16) & 1;
             clip = e >> 17;
             node = &lvl.nodes[num];
-            nf = node->numfaces;
-            ff = node->firstface;
+            /* faces are stored front-facing first, then back-facing */
+            if (side) {
+                ff = node->firstface + node->numfront;
+                nf = node->numfaces - node->numfront;
+            } else {
+                ff = node->firstface;
+                nf = node->numfront;
+            }
             for (i = 0; i < nf; i++) {
                 int fi = ff + i;
-                if (!BIT_TEST(vis_faces, fi))
-                    continue;
-                if ((lvl.faces[fi].flags & FF_PLANEBACK) != side)
-                    continue;
-                add_cand(rc, fi, clip);
+                if (BIT_TEST(vis_faces, fi))
+                    add_cand(rc, fi, clip);
             }
             num = node->child[!side];
         }
@@ -275,14 +278,14 @@ static void draw_range(rcpu_t *rc, int a, int b)
     int i;
     for (i = a; i < b; i++) {
         const frec_t *fr = &rc->frec[i];
-        const lface_t *f = fr->f;
+        const lfgeom_t *g = &lvl.fgeom[fr->fi];
         rc->faces++;
         rc->spancount += fr->nspan;
         if (!view.textures)
-            draw_spans_flat(rc, fr, view.lighting ? f->lit : f->unlit);
-        else if (f->flags & FF_SKY)
+            draw_spans_flat(rc, fr, view.lighting ? g->lit : g->unlit);
+        else if (g->flags & FF_SKY)
             draw_spans_sky(rc, fr);
-        else if (f->flags & FF_TURB)
+        else if (g->flags & FF_TURB)
             draw_spans_turb(rc, fr);
         else
             draw_spans_tex(rc, fr);

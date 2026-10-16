@@ -27,12 +27,19 @@ typedef struct {
     int16_t  child[2];                   /* child < 0: leaf -1-child */
     uint16_t firstface, numfaces;
     int16_t  mins[3], maxs[3];
-    uint8_t  type, pad;                  /* 0-2: axial plane on x/y/z */
+    uint8_t  type;                       /* 0-2: axial plane on x/y/z */
+    uint8_t  numfront;                   /* faces [firstface, +numfront) face the front */
     int16_t  normal[3];                  /* 2.14 */
     fixed_t  dist;
 } lnode_t;                                                          /* 32 */
 
-typedef struct { int16_t x, y, z, r; } lsphere_t;                   /* face bounds */
+/* compact per-face record for the geometry stages (one cache line) */
+typedef struct {
+    uint16_t firstvert;
+    uint8_t  numverts, flags, lit, unlit;
+    uint16_t pad;
+    int16_t  x, y, z, r;                 /* bounding sphere, world units */
+} lfgeom_t;
 
 typedef struct {
     int16_t  contents, parent;
@@ -100,7 +107,7 @@ typedef struct {
     const uint8_t     *colormap;
     const uint8_t     *conchars;
     const uint8_t     *skytex;
-    const lsphere_t   *facesph;
+    const lfgeom_t    *fgeom;
     const int16_t     *nodeparent;
     int numfaces, numleafs, numnodes, numplanes, visleafs;
 } level_t;

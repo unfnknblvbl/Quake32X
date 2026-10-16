@@ -107,6 +107,49 @@ _oram_code_start:
 93:
         .endm
 
+
+        /* r5 = pixels to the next subdivision point: 16 if more than 16
+           pixels are left, else n-1 (the last pixel); 0 for a single pixel */
+        .macro  PIECELEN
+        mov.l   @(TA_LEFT,r14),r5
+        mov     #16,r0
+        cmp/gt  r0,r5
+        bf      94f
+        bra     95f
+        mov     r0,r5
+94:     add     #-1,r5
+95:
+        .endm
+
+        /* advance zi (r9) by r5 pixels */
+        .macro  ENDZI
+        mov     r5,r0
+        cmp/eq  #16,r0
+        bf      96f
+        mov.l   @(TA_DZIDX,r14),r3
+        shll2   r3
+        bra     97f
+        shll2   r3
+96:     mov.l   @(TA_DZIDX,r14),r3
+        mul.l   r5,r3
+        sts     macl,r3
+97:     add     r3,r9
+        .endm
+
+        /* start 2^48 / zi (r9, clamped) on the divider */
+        .macro  ENDDIV
+        mov.l   .Lzimin,r3
+        cmp/ge  r3,r9
+        bt      98f
+        mov     r3,r9
+98:     mov.l   .Ldivu,r6
+        mov.l   r9,@r6
+        mov.l   .Lone,r3
+        mov.l   r3,@(16,r6)
+        mov     #0,r3
+        mov.l   r3,@(20,r6)
+        .endm
+
         .global _span_tex
 _span_tex:
         stc.l   gbr,@-r15
@@ -147,41 +190,54 @@ _span_tex:
 
         mov.l   .Ldivu,r6
         mov.l   @(20,r6),r12            /* z16 for the span start */
-        PERSP   r10, r1, TA_SMAX        /* s */
-        PERSP   r11, r2, TA_TMAX        /* t */
+        PIECELEN                        /* r5 = m (16, or n-1 for the last piece) */
+        tst     r5,r5
+        bf      5f
+        PERSP   r10, r1, TA_SMAX        /* single pixel span */
+        PERSP   r11, r2, TA_TMAX
+        mov     #0,r3
+        bra     .Lprep
+        mov     #0,r4
+5:      /* start the endpoint divide, then convert the start point while it runs */
+        ENDZI
+        ENDDIV
+        mov     r5,r0
+        cmp/eq  #16,r0
+        bf      6f
+        mov.l   @(TA_DSZDX,r14),r3
+        shll2   r3
+        shll2   r3
+        mov.l   @(TA_DTZDX,r14),r4
+        shll2   r4
+        bra     7f
+        shll2   r4
+6:      mov.l   @(TA_DSZDX,r14),r3
+        mul.l   r5,r3
+        mov.l   @(TA_DTZDX,r14),r4
+        sts     macl,r3
+        mul.l   r5,r4
+        sts     macl,r4
+7:      add     r10,r3                  /* sz at the endpoint */
+        add     r11,r4                  /* tz at the endpoint */
+        PERSP   r10, r1, TA_SMAX        /* s, t at the start */
+        PERSP   r11, r2, TA_TMAX
+        mov     r3,r10
+        bra     .Lfinish
+        mov     r4,r11
 
 .Lseg:
-        mov.l   @(TA_LEFT,r14),r8
-        mov     #16,r0
-        cmp/gt  r0,r8
-        bt      .Lfull
-        mov     r8,r5
-        add     #-1,r5                  /* m = n - 1 */
+        /* next piece of a long span: start point is the previous endpoint */
+        PIECELEN
         tst     r5,r5
         bf      2f
         mov     #0,r3                   /* single pixel */
         bra     .Lprep
         mov     #0,r4
-2:      mov.l   @(TA_DZIDX,r14),r3
-        mul.l   r5,r3
-        sts     macl,r3
-        add     r3,r9
-        mov.l   @(TA_DSZDX,r14),r3
-        mul.l   r5,r3
-        sts     macl,r3
-        add     r3,r10
-        mov.l   @(TA_DTZDX,r14),r3
-        mul.l   r5,r3
-        sts     macl,r3
-        bra     .Lend
-        add     r3,r11
-
-.Lfull:
-        mov     #16,r5
-        mov.l   @(TA_DZIDX,r14),r3
-        shll2   r3
-        shll2   r3
-        add     r3,r9
+2:      ENDZI
+        ENDDIV
+        mov     r5,r0
+        cmp/eq  #16,r0
+        bf      3f
         mov.l   @(TA_DSZDX,r14),r3
         shll2   r3
         shll2   r3
@@ -189,29 +245,28 @@ _span_tex:
         mov.l   @(TA_DTZDX,r14),r3
         shll2   r3
         shll2   r3
+        bra     .Lfinish
+        add     r3,r11
+3:      mov.l   @(TA_DSZDX,r14),r3
+        mul.l   r5,r3
+        sts     macl,r3
+        add     r3,r10
+        mov.l   @(TA_DTZDX,r14),r3
+        mul.l   r5,r3
+        sts     macl,r3
         add     r3,r11
 
-.Lend:
-        /* endpoint divide */
-        mov.l   .Lzimin,r3
-        cmp/ge  r3,r9
-        bt      1f
-        mov     r3,r9
-1:      mov.l   .Ldivu,r6
-        mov.l   r9,@r6
-        mov.l   .Lone,r3
-        mov.l   r3,@(16,r6)
-        mov     #0,r3
-        mov.l   r3,@(20,r6)
-        mov.l   @(20,r6),r12
+.Lfinish:
+        mov.l   .Ldivu,r6
+        mov.l   @(20,r6),r12            /* z16 at the endpoint */
         PERSP   r10, r3, TA_SMAX
         PERSP   r11, r4, TA_TMAX
         mov.l   r3,@(TA_SN,r14)
         mov.l   r4,@(TA_TN,r14)
         sub     r1,r3
         sub     r2,r4
-        mov     #16,r0
-        cmp/eq  r0,r5
+        mov     r5,r0
+        cmp/eq  #16,r0
         bf      3f
         shar    r3
         shar    r3

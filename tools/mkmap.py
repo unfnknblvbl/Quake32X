@@ -494,6 +494,27 @@ def main():
             else:
                 lparent[-1 - c] = i
 
+    # reorder each node's faces: front-facing (same side as the plane) first,
+    # so the BSP walk can pick a side's faces without reading face records
+    perm = list(range(len(face_recs)))
+    numfront = [0] * len(nodes)
+    new_recs = list(face_recs)
+    for ni, n in enumerate(nodes):
+        ff, nf = n[9], n[10]
+        if ff + nf > nworld:
+            continue            # submodel node (never walked)
+        idx = list(range(ff, ff + nf))
+        front = [i for i in idx if not (face_recs[i]['flags'] & 1)]
+        back = [i for i in idx if face_recs[i]['flags'] & 1]
+        numfront[ni] = len(front)
+        assert len(front) < 256
+        for k, old in enumerate(front + back):
+            perm[old] = ff + k
+            new_recs[ff + k] = face_recs[old]
+    face_recs[:] = new_recs
+    for k in face_map:
+        face_map[k] = perm[face_map[k]]
+
     # node faces -> output face indices (world faces map 1:1)
     # ------------------------------------------------ build blob
     blob = Blob()
@@ -519,7 +540,7 @@ def main():
     for i, n in enumerate(nodes):
         pl = planes[n[0]]
         b += struct.pack(E + 'hhHH3h3hBB3hi', n[1], n[2], n[9], n[10],
-                         n[3], n[4], n[5], n[6], n[7], n[8], pl[4] if pl[4] < 3 else 3, 0,
+                         n[3], n[4], n[5], n[6], n[7], n[8], pl[4] if pl[4] < 3 else 3, numfront[i],
                          *[int(round(pl[k] * 16384)) for k in range(3)], fx(pl[3]))
     offs['nodes'] = blob.add(b, 16)
     counts['nodes'] = len(nodes)
@@ -571,18 +592,23 @@ def main():
     counts['faces'] = len(face_recs)
     print('faces:', len(face_recs), 'world:', nworld)
 
-    # bounding sphere per face (world units): x, y, z, radius
+    # compact per-face geometry record (16 bytes, one cache line):
+    #   firstvert(H) numverts(B) flags(B) lit(B) unlit(B) pad(H) sphere x,y,z,r (4h)
     b = bytearray()
+    first = 0
     for rec in face_recs:
+        nv = len(rec['vl'])
         if not rec['vl']:
-            b += struct.pack(E + '4h', 0, 0, 0, -1)
-            continue
-        pts = [out_verts[v] for v in rec['vl']]
-        c = [(min(p[k] for p in pts) + max(p[k] for p in pts)) / 2.0 / 8.0 for k in range(3)]
-        ci = [int(round(x)) for x in c]
-        r = max(math.sqrt(sum((p[k] / 8.0 - ci[k]) ** 2 for k in range(3))) for p in pts)
-        b += struct.pack(E + '4h', ci[0], ci[1], ci[2], int(math.ceil(r)) + 1)
-    offs['facesph'] = blob.add(b)
+            sph = (0, 0, 0, -1)
+        else:
+            pts = [out_verts[v] for v in rec['vl']]
+            c = [(min(p[k] for p in pts) + max(p[k] for p in pts)) / 2.0 / 8.0 for k in range(3)]
+            ci = [int(round(x)) for x in c]
+            r = max(math.sqrt(sum((p[k] / 8.0 - ci[k]) ** 2 for k in range(3))) for p in pts)
+            sph = (ci[0], ci[1], ci[2], int(math.ceil(r)) + 1)
+        b += struct.pack(E + 'HBBBBH4h', first, nv, rec['flags'], rec['lit'], rec['unlit'], 0, *sph)
+        first += nv
+    offs['facesph'] = blob.add(b, 16)
     counts['facesph'] = len(face_recs)
 
     b = bytearray()

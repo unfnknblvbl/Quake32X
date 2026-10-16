@@ -123,7 +123,7 @@ static inline const vcache_t *get_vert(rcpu_t *rc, int vi)
 
 /* face bounding sphere against the frustum: -1 = outside, else the clip
  * planes the face can still cross */
-static inline int sphere_clip(const rcpu_t *rc, const lsphere_t *sp, int clip)
+static inline int sphere_clip(const rcpu_t *rc, const lfgeom_t *sp, int clip)
 {
     int k, m;
     for (k = 0, m = 1; k < CP_NUM; k++, m <<= 1) {
@@ -146,8 +146,8 @@ static inline int sphere_clip(const rcpu_t *rc, const lsphere_t *sp, int clip)
  * same face may map to the same cache slot. */
 static int make_poly(rcpu_t *rc, int fi, int clip, int32_t *out)
 {
-    const lface_t *f = &lvl.faces[fi];
-    int i, n = f->numverts, ocand = 0xFF, ocor = 0;
+    const lfgeom_t *g = &lvl.fgeom[fi];
+    int i, n = g->numverts, ocand = 0xFF, ocor = 0;
     const uint16_t *fv;
     fixed_t zmin = 0x7FFFFFFF, *sx = out + 5, *sy;
 
@@ -155,11 +155,11 @@ static int make_poly(rcpu_t *rc, int fi, int clip, int32_t *out)
     if (n < 3 || n > MAXCLIPVERTS - CP_NUM)
         return 0;
     if (clip) {
-        clip = sphere_clip(rc, &lvl.facesph[fi], clip);
+        clip = sphere_clip(rc, g, clip);
         if (clip < 0)
             return 0;
     }
-    fv = &lvl.fverts[f->firstvert];
+    fv = &lvl.fverts[g->firstvert];
     sy = sx + n;
     for (i = 0; i < n; i++) {
         const vcache_t *e = get_vert(rc, fv[i]);

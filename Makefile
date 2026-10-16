@@ -39,6 +39,8 @@ build/%.o: src/%.s | build
 
 # geometry code is instruction-cache bound: smaller beats faster here
 OPT_r_geom = -Os
+OPT_r_setup = -Os
+OPT_r_main = -Os
 
 build/%.o: src/%.c src/*.h | build
 	$(CC) $(CFLAGS) $(OPT_$*) -c -o $@ $<
