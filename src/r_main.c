@@ -74,8 +74,9 @@ void r_setup_view(fixed_t org[3], int yaw, int pitch)
     view.down[1] = -fixmul(sy, sp);
     view.down[2] = -cp;
     for (i = 0; i < 3; i++) {
-        view.r80s5[i] = (int32_t)(((int64_t)view.right[i] << 21) / PROJ);
-        view.d80s5[i] = (int32_t)(((int64_t)view.down[i] << 21) / PROJ);
+        /* x * 2^21 / 80 == x * (2^32 / 40) >> 12, without a 64-bit divide */
+        view.r80s5[i] = (int32_t)(((int64_t)view.right[i] * 107374182) >> 12);
+        view.d80s5[i] = (int32_t)(((int64_t)view.down[i] * 107374182) >> 12);
         view.r16[0][i] = view.right[i] >> 2;
         view.r16[1][i] = view.down[i] >> 2;
         view.r16[2][i] = view.fwd[i] >> 2;
@@ -292,6 +293,7 @@ static void draw_range(rcpu_t *rc, int a, int b)
 void draw_batch(rcpu_t *rc)
 {
     int i, start = 0, n = rc->nfrec;
+    wait_fb(rc);
     if (++rc->batch == 0xFFFF) rc->batch = 1;
     for (i = 0; i < n; i++) {
         if (!face_setup(rc, &rc->frec[i])) {
@@ -371,6 +373,7 @@ void r_render(rcpu_t *rc, int row0, int row1)
     rc->rowsleft = row1 - row0;
     rc->nfrec = 0;
     rc->nspans = 0;
+    rc->fb_ready = 0;
 
     walk_bsp(rc);
     ci = 0;
@@ -379,5 +382,6 @@ void r_render(rcpu_t *rc, int row0, int row1)
         geom_raster(rc);
         draw_batch(rc);
     }
+    wait_fb(rc);
     fill_gaps(rc);
 }

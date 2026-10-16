@@ -301,6 +301,7 @@ static void cover_row(rcpu_t *rc, int y, int xs, int xe)
             /* out of gap slots: paint the remainder black and drop it */
             volatile uint16_t *d = r_fb + y * SCREENW;
             int x;
+            wait_fb(rc);
             for (x = xe; x < ge; x++) d[x] = 0;
         }
         g[i * 2 + 1] = xs;

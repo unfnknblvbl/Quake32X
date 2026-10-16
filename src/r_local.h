@@ -39,6 +39,7 @@ typedef struct {
     int     split;                   /* first row drawn by the slave */
     int     time;                    /* 60 Hz ticks, for sky and water */
     int     mipbias;
+    int     flip_fs;                 /* FS value to wait for before drawing */
 } view_t;
 
 typedef struct { fixed_t x, y, z; } vec3_t;
@@ -119,6 +120,7 @@ typedef struct {
     int      nspans;
     span_t   spans[MAXSPANS];
     uint16_t batch;
+    int      fb_ready;               /* the frame we draw into is no longer displayed */
 
     vec3_t   clipa[MAXCLIPVERTS], clipb[MAXCLIPVERTS];
 
@@ -170,6 +172,20 @@ extern const uint8_t bitmask8[8];
 #define BIT_SET(a, i)  ((a)[(i) >> 3] |= bitmask8[(i) & 7])
 
 enum { CP_NEAR, CP_FAR, CP_LEFT, CP_RIGHT, CP_TOP, CP_BOTTOM, CP_NUM };
+
+/* the back buffer becomes writable once the requested flip has happened:
+ * geometry for the next frame runs before that, drawing waits here */
+static inline void wait_fb(rcpu_t *rc)
+{
+#ifndef HOST
+    if (!rc->fb_ready) {
+        while ((MARS_VDP_FBCTL & MARS_VDP_FS) != view.flip_fs) ;
+        rc->fb_ready = 1;
+    }
+#else
+    (void)rc;
+#endif
+}
 
 /* r_main.c */
 void r_init(void);

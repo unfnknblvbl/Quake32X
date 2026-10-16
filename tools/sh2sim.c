@@ -77,7 +77,7 @@ static cpu_t cpu[2];
 static uint64_t now_vbl;              /* vblank count */
 static uint16_t pad_now;
 /* render timing: GO = COMM4 write by master, slave done = COMM6 write, master done = its first COMM6 poll */
-static uint64_t t_go, sum_master, sum_slave, nframes_r, t_sdone, sum_serial, t_flipreq, sum_flipwait, nflip;
+static uint64_t t_go, sum_master, sum_slave, nframes_r, t_sdone, sum_serial, t_flipreq, sum_flipwait, nflip, sum_upd, sum_hud;
 static int master_done_seen;
 
 /* profile */
@@ -283,6 +283,8 @@ static void reg_write(cpu_t *c, uint32_t a, int size, uint32_t v)
         int i = (off - 0x20) >> 1;
         if (size == 2 && off == 0x24 && c->id == 0) {
             if (t_sdone) sum_serial += c->cyc - t_sdone;
+            if (t_flipreq) sum_upd += c->cyc - t_flipreq;
+            if (t_flipreq && t_sdone) sum_hud += t_flipreq - t_sdone;
             t_go = c->cyc; master_done_seen = 0;
         }
         if (size == 2 && off == 0x26 && c->id == 1 && t_go) { sum_slave += c->cyc - t_go; nframes_r++; t_sdone = c->cyc; }
@@ -872,8 +874,9 @@ int main(int argc, char **argv)
                sum_master * 1000.0 / SH2_HZ / nframes_r, sum_slave * 1000.0 / SH2_HZ / nframes_r,
                seconds * 1000.0 / nframes_r);
     if (nframes_r > 1 && nflip)
-        printf("serial (slave done -> next go) %.2f ms, of which flip wait %.2f ms\n",
-               sum_serial * 1000.0 / SH2_HZ / (nframes_r - 1), sum_flipwait * 1000.0 / SH2_HZ / nflip);
+        printf("serial (slave done -> next go) %.2f ms: hud etc %.2f ms, flip request -> go %.2f ms; flip latency %.2f ms\n",
+               sum_serial * 1000.0 / SH2_HZ / (nframes_r - 1), sum_hud * 1000.0 / SH2_HZ / (nframes_r - 1),
+               sum_upd * 1000.0 / SH2_HZ / (nframes_r - 1), sum_flipwait * 1000.0 / SH2_HZ / nflip);
     for (i = 0; i < 2; i++) {
         cpu_t *c = &cpu[i];
         printf("cpu%d: %llu instr, stalls: sdram-w %llu sdram-r %llu rom %llu fb %llu regs %llu div %llu mul %llu; misses %llu (ifetch %llu)\n",
@@ -905,7 +908,7 @@ int main(int argc, char **argv)
                 for (j = k + 1; j < no; j++) if (per[order[j]][0] > per[order[k]][0]) { int t2 = order[k]; order[k] = order[j]; order[j] = t2; }
             }
             printf("cpu%d profile (%llu cycles)   %%total  sdram-r sdram-w   rom    fb  div/mul (%% of function)\n", i, (unsigned long long)tot);
-            for (k = 0; k < no && k < 20; k++) {
+            for (k = 0; k < no && k < 32; k++) {
                 uint64_t *pp = per[order[k]];
                 printf("  %-22s %5.1f%%   %5.1f   %5.1f  %5.1f %5.1f  %5.1f\n", syms[order[k]].name, 100.0 * pp[0] / tot,
                        100.0 * pp[1] / pp[0], 100.0 * pp[2] / pp[0], 100.0 * pp[3] / pp[0], 100.0 * pp[4] / pp[0], 100.0 * pp[5] / pp[0]);

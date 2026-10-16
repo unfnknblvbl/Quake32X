@@ -139,6 +139,7 @@ void pri_main(void)
     view.mipbias = 0;
     apply_settings();
     last_tick = fps_tick = get_vblank_count();
+    view.flip_fs = MARS_VDP_FBCTL & MARS_VDP_FS;
     update_frame(&last_tick, &viewleaf, &oldpad);
 
     for (;;) {
@@ -146,21 +147,31 @@ void pri_main(void)
         uint16_t fs;
         uint32_t now;
 
-        /* render: master does rows [0,split), slave [split,SCREENH) */
+        /* render: master does rows [0,split), slave [split,SCREENH). Both
+           start with geometry and wait for the previous flip only when they
+           first write to the framebuffer. */
         view.split = split;
         if (++tag == 0) tag = 1;
         SLAVE_GO = tag;
         r_render(&rcpu[0], 0, split);
         while (SLAVE_DONE != tag)
             mspin++;
-        MASTER_DONE = tag;
+        MARS_SYS_COMM8 = tag;
+        while (MARS_SYS_COMM10 != tag) ;        /* slave publishes its wait */
         sspin = *(volatile int32_t *)UNCACHED(&slave_spin);
 
-        /* balance the two halves using who waited for whom */
-        if (mspin > sspin + 8 && split < SCREENH - 16)
-            split += mspin > sspin + 400 ? 2 : 1;
-        else if (sspin > mspin + 8 && split > 16)
-            split -= sspin > mspin + 400 ? 2 : 1;
+        /* balance the two halves using who waited for whom: one spin is a
+           few cycles, a row costs roughly 10-20k cycles */
+        {
+            int32_t d = mspin - sspin, step;
+            step = d / 4096;
+            if (step == 0 && (d > 64 || d < -64)) step = d > 0 ? 1 : -1;
+            if (step > 3) step = 3;
+            if (step < -3) step = -3;
+            split += step;
+            if (split < 16) split = 16;
+            if (split > SCREENH - 16) split = SCREENH - 16;
+        }
 
         if (menu_active)
             menu_draw();
@@ -176,12 +187,12 @@ void pri_main(void)
         }
         MARS_SYS_COMM2 = fps10;
 
-        /* request the flip, then run the game for the next frame while the
-           hardware waits for vertical blank */
+        /* request the flip; it happens at the next vertical blank while the
+           game logic and the next frame's geometry run */
         fs = MARS_VDP_FBCTL & MARS_VDP_FS;
         MARS_VDP_FBCTL = fs ^ 1;
+        view.flip_fs = fs ^ 1;
         update_frame(&last_tick, &viewleaf, &oldpad);
-        while ((MARS_VDP_FBCTL & MARS_VDP_FS) == fs) ;
     }
 }
 
@@ -205,5 +216,6 @@ void sec_main(void)
         while (MASTER_DONE != tag)
             spin++;
         *(volatile int32_t *)UNCACHED(&slave_spin) = spin;
+        MARS_SYS_COMM10 = tag;
     }
 }
