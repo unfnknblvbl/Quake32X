@@ -20,10 +20,14 @@ MAP     ?= e1m1
 
 all: quake32x.32x
 
-build/m68k.bin: src-md/md.s | build
+build/m68k.bin: src-md/md.s src-md/md.ld | build
 	$(MDAS) -m68000 --register-prefix-optional -o build/md.o $<
-	$(MDLD) -Ttext=0x880800 -o build/md.elf build/md.o
-	$(MDOBJCOPY) -O binary build/md.elf $@
+	$(MDLD) -T src-md/md.ld -o build/md.elf build/md.o
+	$(MDOBJCOPY) -O binary -j .text -j .ramtext build/md.elf $@
+
+# Mega Drive tiles, palettes and the pre-rendered view weapons
+build/md_data.bin: tools/mkmd.py data/pak0.pak | build
+	python3 -I tools/mkmd.py data/pak0.pak $@
 
 data/$(MAP).lvl: tools/mkmap.py tools/mkents.py tools/anorms.py data/pak0.pak
 	python3 tools/mkmap.py data/pak0.pak maps/$(MAP).bsp $@
@@ -66,7 +70,7 @@ build/demo_data.c: tools/make_demo.py data/$(MAP)_route.json | build
 build/demo_data.o: build/demo_data.c src/demo.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-build/crt0.o: src/crt0.s build/m68k.bin build/level.lvl
+build/crt0.o: src/crt0.s build/m68k.bin build/md_data.bin build/level.lvl
 	$(AS) --big $(ASDEFS) -o $@ $<
 
 build/%.o: src/%.s | build

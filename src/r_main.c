@@ -431,12 +431,34 @@ void r_render(rcpu_t *rc, int row0, int row1)
         rc->fr_len[k] = (fixed_t)(isqrt32(sq) << 8) + 1;    /* 16.16 */
     }
 
-    for (r = row0; r < row1; r++) {
-        gaps[r].n = 1;
-        gaps[r].g[0] = 0;
-        gaps[r].g[1] = view.vw;
-    }
     rc->rowsleft = row1 - row0;
+    for (r = row0; r < row1; r++) {
+        gaprow_t *gr = &gaps[r];
+        int c = r - view.cut_row0;
+        gr->n = 1;
+        gr->g[0] = 0;
+        gr->g[1] = view.vw;
+        if ((unsigned)c < (unsigned)view.cut_n) {
+            /* the view weapon (a Mega Drive sprite) hides [x0, x1) */
+            int x0 = view.cut_x[c * 2], x1 = view.cut_x[c * 2 + 1];
+            if (x1 > view.vw) x1 = view.vw;
+            if (x0 >= x1)
+                continue;
+            if (x0 == 0 && x1 == view.vw) {
+                gr->n = 0;
+                rc->rowsleft--;
+            } else if (x0 == 0)
+                gr->g[0] = x1;
+            else if (x1 == view.vw)
+                gr->g[1] = x0;
+            else {
+                gr->n = 2;
+                gr->g[1] = x0;
+                gr->g[2] = x1;
+                gr->g[3] = view.vw;
+            }
+        }
+    }
     rc->nfrec = 0;
     rc->nspans = 0;
     rc->nwfrec = 0;

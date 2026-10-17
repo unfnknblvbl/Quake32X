@@ -5,14 +5,20 @@ A from-scratch Quake world renderer for a **stock 32X** (two 23 MHz SH-2s,
 (E1M1) converted from the shareware `pak0.pak`.
 
 E1M1 is playable from the start to the exit: its grunts and dogs, the shotgun
-and super shotgun, items, a status bar and Quake's own sounds through the 32X
-PWM. A pause-menu setting, **Monsters at once**, caps how many monsters are in
-the world at a time (2 by default); the rest wait in a queue and teleport in,
-with Quake's teleport sound and particle burst, as others die.
+and super shotgun, items, doors, the lift, buttons, secret doors, triggers
+and messages, a status bar and Quake's own sounds through the 32X PWM. A
+pause-menu setting, **Monsters at once**, caps how many monsters are in the
+world at a time (2 by default); the rest wait in a queue and teleport in,
+with Quake's teleport sound and particle burst, as others die. **Demo** in
+the same menu lets a bot play the level from the start.
+
+The Mega Drive does its share: its VDP draws the text, the border around a
+reduced view and the view weapon (pre-rendered sprites) over the 32X
+picture, so the SH-2s spend all their time on the 3D view.
 
 ## Controls (3- or 6-button pad)
 
-| Input | Action |
+| Input (default) | Action |
 |---|---|
 | D-pad up / down | move forward / back |
 | D-pad left / right | turn |
@@ -23,7 +29,12 @@ with Quake's teleport sound and particle burst, as others die.
 | B | jump (walk mode) / fly up (fly mode) |
 | START | pause menu |
 
-The controls are shown at the bottom of the screen for the first few seconds.
+The buttons can be changed in the pause menu (**Controls...**): fire, jump
+and strafe/look can each go on A, B, C, X, Y, Z or MODE (the last four on a
+6-button pad), next weapon on a free button or the strafe + fire
+combination, and looking up and down can be inverted. The controls, with the
+buttons as set, are shown at the bottom of the screen for the first few
+seconds.
 
 Input and timing don't depend on any single interrupt. The game clock follows
 whichever vblank counter is running, either the 68000's or the master SH-2's,
@@ -54,20 +65,33 @@ scene keeps rendering behind the menu, so every change shows up immediately.
   all at the start, as Quake does.
 * **Show FPS**: the frame rate.
 * **Movement**: walk (gravity, steps, collision with the player hull) or fly.
+* **Controls...**: the page described above; Defaults puts the buttons back.
+* **Demo (bot plays)**: the bot restarts the level and plays it to the exit
+  (below). Turning it off hands the controls back where it is.
 * **Resume**
 
 ## Performance
 
-With monsters, the walkthrough demo (`make DEMO=bot`, flat shaded, full
-screen) averages 14.4 fps in the cycle model with 2 monsters at once, and 9
-frames in 10 fall between 8.8 and 27.5 fps. On the same route with monsters
-off it averages 19.8 fps. Drawing the models costs 15 to 25% of each CPU in a
-fight; the sound mixer takes about 5% of the slave.
+The demo bot's run in the cycle model (flat shaded, see-through water, 80%
+screen, 2 monsters at once) averages 13.8 fps from the start to the exit,
+which takes it about two and a half minutes.
 
-The game systems cost about 12% even with no monsters (the weapon, items,
-status bar, sound and game logic, plus less SDRAM for the surface cache). The
-route table below is from before they were added; the same route now
-averages 27.6 fps flat and 16.1 fps textured at full screen.
+Moving the text, the border and the view weapon to the Mega Drive, and the
+cold code to ROM (which gave the surface cache about 9 KB more per CPU), sped
+up these fixed views in the cycle model (fps, no monsters, full screen):
+
+| View | Textured, before | Textured, now | Flat, before | Flat, now |
+|---|---|---|---|---|
+| Spawn point | 9.0 | 10.8 | 16.6 | 17.3 |
+| Lift room | 16.8 | 18.0 | 22.9 | 25.1 |
+| Bottom of the lift | 7.5 | 7.4 | 14.5 | 15.3 |
+
+The gains come from the 32X no longer drawing the weapon model and the text,
+and in textured mode from the bigger surface cache. The cutout behind the
+weapon adds about 0.5%, since the shotgun covers only about 1.5% of the view.
+
+The tables below are from before monsters and the other game systems were
+added (they cost about 12% even with no monsters).
 
 The best single measure is the average over the whole walkthrough route
 (the start, the lift, the courtyard, the pool and the channel), from
@@ -126,9 +150,13 @@ big-endian, fixed-point blob that stays in cartridge ROM. It produces:
 * the clip hull used for collision;
 * the palette, colormap, font and sky texture.
 
-Doors and platforms are clipped into the world leaves as static fragments.
-Doors are placed in their open position, because nothing moves them yet, and
-they are not solid.
+Doors, secret doors, platforms and buttons (`tools/movers.py`) follow their
+paths from id's QuakeC (doors.qc, plats.qc, buttons.qc). Each one's faces are
+clipped into the world's BSP leaves at keyframes every 16 units along its
+path; the renderer draws the keyframe nearest the mover's position, shifted
+by the few units left over. Movers are solid in every clip hull, carry what
+stands on them, and crush or reverse when blocked. Triggers, counters,
+teleporters, secrets and messages work as in QuakeC.
 
 `tools/mkents.py` adds the game data to the same blob: an 18-byte record per
 entity the game knows (monsters, items, the exit), the models, Quake's 162
@@ -177,8 +205,8 @@ At runtime, each frame goes like this:
      covered. The buffers for this come out of the surface cache memory only
      while the option is on.
    * **Screen size** changes the projection (focal length = half the view
-     width) and offsets the framebuffer pointer. The border tile is drawn
-     only into framebuffers that had the menu over it.
+     width) and offsets the framebuffer pointer. The border is the Mega
+     Drive's (below).
 5. **Vertical blank.** Both CPUs begin the next frame's walk and geometry
    while the hardware is still waiting for vertical blank, and block only at
    their first framebuffer write.
@@ -190,12 +218,13 @@ The game (`src/g_*.c`, `src/r_model.c`, `src/snd.c`):
   slave more of the picture. Monsters follow id's QuakeC (soldier.qc,
   dog.qc, ai.qc, fight.qc) and Quake's step-and-chase movement against the
   clip hulls, thinking ten times a second. The cold code (`g_main`,
-  `g_monst`) runs from cartridge ROM; collision stays in SDRAM.
+  `g_monst`, `g_mover`, the bot, the menu, the Mega Drive link) runs from
+  cartridge ROM; collision stays in SDRAM.
 * **Depth only where it is needed.** There is no z-buffer. Each frame the
   master reserves a per-row interval of depth around every model on screen,
   up to 6,144 samples. World spans write 1/z there as they are drawn, and
   models and particles test against it. A model too close to fit is drawn
-  back to front without it, like the view weapon.
+  back to front without it.
 * **Models** are flat shaded in both texture modes, one colour per triangle,
   lit the way Quake lights models. Each triangle takes the depth of its
   nearest vertex; that is close enough at this resolution.
@@ -204,6 +233,37 @@ The game (`src/g_*.c`, `src/r_model.c`, `src/snd.c`):
   buffer and mixes the next one (6 channels of Quake's 11 kHz samples, each
   doubled to 22 kHz). The master queues new sounds; Quake's distance fade and
   stereo panning are worked out when a sound starts.
+
+The Mega Drive layer (`src-md/md.s`, `src/mdlink.c`, `tools/mkmd.py`):
+
+* The 32X mixes its picture with the Mega Drive's. With the priority bit
+  left at 0, the Mega Drive's pixels are in front wherever it draws
+  something; where it shows only its backdrop colour, the 32X picture shows.
+* **Plane A** holds the text: the status bar, messages, the FPS counter, the
+  hint, the menu and the end-of-level figures, in Quake's 8x8 console font.
+  **Plane B** holds the border tile around a reduced view, the black status
+  bar, and a dither that darkens the screen behind the menu. The view sizes
+  are on the Mega Drive's 8-pixel grid, so the border is made of whole tiles.
+* **The view weapon** is a set of sprites. `tools/mkmd.py` renders the
+  shotgun and super shotgun frames at every screen size, textured, with
+  Quake's model lighting, at full 320-pixel resolution and anti-aliased, in
+  one 15-colour palette per weapon. The 68000 copies the current weapon's
+  frames into VRAM when the weapon or screen size changes (up to 320 tiles),
+  places the sprites each frame, and lights the weapon by switching between
+  16 precomputed palettes.
+* **The cutout.** For every weapon frame, `mkmd.py` also stores the 32X
+  pixels the sprite covers completely, row by row. The renderer starts each
+  frame with those marked as covered in its coverage lists, so nothing
+  behind the weapon is ever drawn. The weapon model itself is no longer
+  drawn by the SH-2s at all.
+* **The link.** The SH-2s cannot reach the Mega Drive VDP, so the master
+  queues 16-bit words for the 68000: tiles for text cells (only the cells
+  that changed since the last frame), the weapon's frame and light, and
+  "load this weapon". It hands them over one at a time through COMM0, with
+  a number in COMM10 that the 68000 answers in COMM14, and feeds the queue
+  between render batches. The 68000 runs its loop from work RAM, off the
+  cartridge bus. It applies the weapon at the next vertical blank, with the
+  32X's frame flip.
 
 Other tricks:
 
@@ -226,7 +286,7 @@ Requirements:
 * Quake's `pak0.pak` copied to `data/pak0.pak`.
 
 ```
-make            # -> quake32x.32x (2 MB), the compatible build
+make            # -> quake32x.32x (4 MB), the compatible build
 make FAST=1     # stacks and span loop in SH-2 on-chip RAM (two-way cache mode)
 ```
 
@@ -257,22 +317,37 @@ To record it, run `sh2sim ... -video frames.rgb -vlog frames.log`. This
 writes every displayed frame as raw 320x224 RGB24, and logs the demo phase
 and FPS for each vblank, which is useful for captions.
 
-## Monster walkthrough demo
+## The demo bot
+
+Pause menu, **Demo (bot plays)**: a bot plays E1M1 from the start to the
+exit, through the pad like a person would (the D-pad to turn and walk, C to
+fire). It takes the lift down, crosses the courtyard, presses the button
+that slides the bridge out over the slime and looks at the slime while it
+comes, crosses, presses the three buttons that open the door to the lower
+level, and walks out through the exit. Its route comes from
+`tools/build_botroute.py`: the legs in `data/e1m1_botlegs.json` are planned
+with `tools/plan_route.py` (with closed doors solid, and the lift and bridge
+as floors where they stand when used), centred in corridors by
+`tools/refine_route.py`, and joined with the actions in between (touch a
+button, wait for a mover, look at something). The result is
+`data/e1m1_botroute.json`.
+
+It stops to shoot anything in sight within shotgun range and fires only when
+Quake's vertical auto-aim would hit. It picks up backpacks, and shells or
+health when low, but only along a straight line with floor all the way, and
+walks back to where it left the route. Its only help is taking a quarter of
+the damage.
 
 ```
-make DEMO=bot   # a bot plays E1M1 to the exit
-tools/record_bot.sh OUT 68   # record it in the cycle model, with sound
+tools/record_bot.sh OUT [seconds] [menu keys]   # record it in the cycle model
 ```
 
-The bot opens the pause menu, switches to flat shading, shows the Monsters
-at once setting, then plays through the pad like a person: the D-pad to turn
-and walk, C to fire. Its route to the exit through the north hall comes from
-`tools/plan_route.py`, centred in corridors by `tools/refine_route.py`
-(`data/e1m1_botroute.json`). It stops to shoot anything in sight within
-shotgun range and fires only when Quake's vertical auto-aim would hit. It
-picks up backpacks, and shells or health when low. Its only help is taking a
-quarter of the damage. `tools/hostgame.sh` builds the same game for a PC (with
-sanitizers), for quick runs.
+`record_bot.sh` builds the normal ROM, sets the pause menu with scripted
+presses (by default: flat shading, see-through water, 80% screen, then
+Demo), and records every frame, the sound and a per-frame log.
+`tools/hostgame.sh` builds the same game for a PC (with sanitizers) for
+quick runs: `LOG=1` prints the bot and player each frame, `DOORLOG=1` the
+movers.
 
 ## Tools
 
@@ -282,7 +357,15 @@ sanitizers), for quick runs.
   per-function profiles (`-prof`, including code run from ROM), hottest
   instructions (`-hot N`), scripted pad input, screenshots, video capture
   (`-video`), PWM sound with the SH-2 DMA and its interrupt (`-audio`), and
-  memory watches in the per-vblank log (`-watch symbol n`).
+  memory watches in the per-vblank log (`-watch symbol n`). Built by
+  `tools/build_sim.sh` with `tools/mdsim.h`, it also runs the Mega Drive
+  side: the ROM's 68000 program (on the Musashi 68000 core, taken from a
+  PicoDrive source tree, `MUSASHI=...`), the joypad port and the VDP's
+  planes and sprites, mixed over the 32X picture as the 32X does it.
+* `tools/mkmd.py`: the Mega Drive tiles, palettes, pre-rendered weapon
+  sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x4000).
+* `tools/movers.py`: doors, platforms, buttons and triggers worked out from
+  the entity lump, shared by `mkmap.py` and `mkents.py`.
 * `tools/mkents.py`: entities, models and sounds for the level blob;
   `--header src/g_ids.h` writes the matching ids.
 * `tools/plan_route.py` and `tools/make_demo.py`: the route planner and the
@@ -298,8 +381,8 @@ sanitizers), for quick runs.
 
 ## Not done yet / ideas
 
-* Moving, solid doors and platforms. E1M1's lift is drawn but not solid, so
-  you drop down the shaft.
+* The XE-1 AP analogue pad (and its extension for modern pads' second stick
+  and triggers), with its own settings.
 * Firing the nailgun, and the other weapons; textured monster skins; damage
   from slime, lava and falls; E1M2 and the change of level.
 * Simpler grunt and dog models (about half the triangles) would make fights

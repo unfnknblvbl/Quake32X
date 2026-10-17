@@ -1,6 +1,7 @@
 /* Quake 32X - main loops for the two SH-2s */
 #include "g_local.h"
 #include "bot.h"
+#include "mdlink.h"
 
 extern const uint8_t level_data[];
 extern uint8_t _bss_end[];  /* linker symbol __bss_end */
@@ -8,11 +9,13 @@ volatile uint32_t vblank_count;
 volatile uint16_t pad_latch;     /* OR of every pad sample, set by the VBlank IRQ */
 volatile uint16_t *r_fb;
 volatile uint16_t *r_screen = (volatile uint16_t *)0x24000200;
-static int border_dirty;            /* framebuffers whose border needs redrawing */
-static int sbar_force;              /* status bar redraws after the menu closes */
 static uint8_t *arena_base;         /* per-CPU memory: liquid buffers + surface cache */
 static int arena_each, arena_mesh = -1;
-static int win_x, win_y;            /* view window origin (rendered pixels) */
+static int win_x, win_y;            /* view window origin (32X pixels and rows) */
+volatile uint8_t dbg_phase;         /* demo phase, for the simulator's log */
+
+/* the view weapon of the frame being drawn (the 68000 shows it at the flip) */
+static struct { int weapon, frame, light; } gun;
 
 #define SLAVE_GO     MARS_SYS_COMM4
 #define SLAVE_DONE   MARS_SYS_COMM6
@@ -29,7 +32,7 @@ static int win_x, win_y;            /* view window origin (rendered pixels) */
 
 static rcpu_t rcpu[2];
 static surfcache_t *schash[2][HASHSIZE];
-static volatile int32_t slave_spin;
+static volatile int32_t slave_spin, slave_tag;
 static uint16_t pad_poll;           /* pad samples taken by the master while rendering */
 #ifdef DEMO
 static int hint_time = 0;
@@ -37,24 +40,27 @@ static int hint_time = 0;
 static int hint_time = 8 * 60;      /* show the controls for the first 8 seconds */
 #endif
 
-/* 60 Hz time from whichever vblank counter is running: the 68000's (COMM14)
-   or the master SH-2's interrupt. Either one alone keeps the game going. */
+/* 60 Hz time from whichever vblank counter is running: the 68000's (COMM14
+   low byte) or the master SH-2's interrupt. Either one alone keeps the game
+   going. */
 static uint32_t time_now(void)
 {
-    static uint16_t last68;
+    static uint8_t last68;
     static uint32_t lastirq, t;
-    uint16_t c = MARS_SYS_COMM14;
+    uint8_t c = MARS_SYS_COMM14 & 0xFF;
     uint32_t v = get_vblank_count();
-    uint32_t d68 = (uint16_t)(c - last68), dirq = v - lastirq;
+    uint32_t d68 = (uint8_t)(c - last68), dirq = v - lastirq;
     last68 = c;
     lastirq = v;
     t += d68 > dirq ? d68 : dirq;
     return t;
 }
 
+/* called by the master between batches while it renders */
 static void poll_pad(void)
 {
     pad_poll |= PAD;
+    md_pump();
 }
 
 void *memcpy(void *dst, const void *src, unsigned n)
@@ -123,7 +129,6 @@ static void apply_settings(void)
         win_x = (SCREENW - vs->w) >> 1;
         win_y = (SCREENH - SBAR_H - vh) >> 1;
         r_fb = r_screen + win_y * SCREENW + win_x;
-        border_dirty = 2;
     }
 }
 
@@ -172,7 +177,7 @@ static uint16_t demo_update(uint32_t now, int ticks, uint16_t pad_pressed)
         player.yaw = c->yaw;
         player.pitch = c->pitch;
         while (ph[1].tick >= 0 && ph[1].tick <= demo_tick) ph++;
-        MARS_SYS_COMM0 = ph->phase | (menu_active ? 0x80 : 0);
+        dbg_phase = ph->phase | (menu_active ? 0x80 : 0);
     }
     return pressed;
 }
@@ -216,7 +221,6 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
     }
     if (menu_active) {
         menu_input(pressed);                /* the menu reads the pad itself */
-        sbar_force = 2;
     } else {
         /* the player's buttons as actions (Controls page), or the bot's */
         uint16_t held = map_pad(pad);
@@ -252,31 +256,28 @@ static void update_view(int *viewleaf)
     }
     g_build_scene();
     snd_update();
-}
 
-/* the status bar, redrawn only when its text changes (per framebuffer) */
-static void sbar_draw(int force)
-{
-    static char last[2][48];
-    static uint8_t lasthi[2] = { 0xFF, 0xFF };
-    char buf[48];
-    int fb = (MARS_VDP_FBCTL & MARS_VDP_FS) ^ 1;     /* the one being drawn */
-    int hi = g_hud_text(buf), i;
-    if (!force && lasthi[fb] == hi) {
-        for (i = 0; buf[i] == last[fb][i]; i++)
-            if (!buf[i])
-                return;
-    }
-    for (i = 0; i < 47 && buf[i]; i++)
-        last[fb][i] = buf[i];
-    last[fb][i] = 0;
-    lasthi[fb] = hi;
+    /* the view weapon: the Mega Drive draws it, the 32X skips what it hides */
+    if (!ps.dead && !cfg.fly && !g_level_done) {
+        int j = view.lighting ? 255 - g_light_point(player.pos) : 160;
+        gun.weapon = ps.weapon == IT_SUPER_SHOTGUN;
+        gun.frame = ps.weaponframe;
+        gun.light = j < 24 ? 24 : j;
+    } else
+        gun.frame = -1;
     {
-        volatile uint32_t *d = (volatile uint32_t *)(r_screen + (SCREENH - SBAR_H) * SCREENW);
-        for (i = 0; i < SBAR_H * SCREENW / 2; i++)
-            d[i] = 0;
+        md_cut_t cut;
+#ifdef NO_CUTOUT
+        if (0) {
+#else
+        if (md_gun_cut(gun.weapon, cfg.size, gun.frame, &cut)) {
+#endif
+            view.cut_row0 = cut.row0;
+            view.cut_n = cut.nrows;
+            view.cut_x = cut.x;
+        } else
+            view.cut_n = 0;
     }
-    draw_text(4, SCREENH - SBAR_H + 1, buf, hi);
 }
 
 void pri_main(void)
@@ -287,6 +288,7 @@ void pri_main(void)
     int split = SCREENH / 2, splith = SCREENH;
 
     level_init(level_data);
+    md_init();
     r_init();
     r_span_init();
     r_oram_init();
@@ -335,20 +337,11 @@ void pri_main(void)
         SLAVE_GO = tag;
         r_render(&rcpu[0], 0, split);
         update_input(&last_tick, &oldpad);  /* game ticks while the slave draws */
-        /* the border is static: redraw it only into framebuffers that had a
-           menu or hint drawn over it (or after a size change), so after the
-           overlay goes away both framebuffers get one clean redraw */
-        if (border_dirty) {
-            if (view.vw < SCREENW)
-                border_draw(win_x, win_y, view.vw, view.vh);
-            border_dirty--;
-        }
-        if (menu_active || hint_time > 0)
-            border_dirty = 2;
+        md_pump();
         while (SLAVE_DONE != tag)
             mspin++;
         MARS_SYS_COMM8 = tag;
-        while (MARS_SYS_COMM10 != tag) ;        /* slave publishes its wait */
+        while (*(volatile int32_t *)UNCACHED(&slave_tag) != tag) ;     /* slave publishes its wait */
         sspin = *(volatile int32_t *)UNCACHED(&slave_spin);
 
         /* balance the two halves using who waited for whom: one spin is a
@@ -367,18 +360,11 @@ void pri_main(void)
             }
         }
 
-        if (!menu_active) {
-            sbar_draw(sbar_force > 0 || border_dirty > 0);
-            if (sbar_force) sbar_force--;
-        }
-        if (g_level_done)
-            intermission_draw(ps.kills, ps.total_monsters, hw_div(g_level_ticks, 60), ps.secrets, ps.total_secrets);
+        overlays_draw(win_x, win_y, fps10, hint_time > 0);
         if (menu_active)
-            menu_draw();
-        if (cfg.showfps)
-            hud_draw(menu_active ? 0 : win_x * 2, menu_active ? 0 : win_y, fps10, split);  /* clear of the menu */
-        if (hint_time > 0 && !menu_active)
-            hint_draw();
+            md_wait();              /* paused: show the menu at once */
+        else
+            md_pump_for(48);
 
         now = frame_now;
         frames++;
@@ -394,6 +380,8 @@ void pri_main(void)
         fs = MARS_VDP_FBCTL & MARS_VDP_FS;
         MARS_VDP_FBCTL = fs ^ 1;
         view.flip_fs = fs ^ 1;
+        md_gun(gun.weapon, cfg.size, gun.frame, gun.light);    /* with the flip */
+        md_pump();
         update_view(&viewleaf);
     }
 }
@@ -423,6 +411,6 @@ void sec_main(void)
         while (MASTER_DONE != tag)
             spin++;
         *(volatile int32_t *)UNCACHED(&slave_spin) = spin;
-        MARS_SYS_COMM10 = tag;
+        *(volatile int32_t *)UNCACHED(&slave_tag) = tag;
     }
 }

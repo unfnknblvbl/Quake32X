@@ -49,10 +49,13 @@ static uint16_t pad_at(int fr)
     return b;
 }
 
+void host_md_composite(uint8_t *rgb);
+
 static void put_rgb(FILE *f)
 {
-    static uint8_t row[320 * 3];
+    static uint8_t img[224 * 320 * 3];
     for (int y = 0; y < 224; y++) {
+        uint8_t *row = img + y * 320 * 3;
         for (int x = 0; x < 320; x++) {
             int c = ((const uint8_t *)fbmem)[(y >> 1) * SCREENW * 2 + x];
             uint16_t p = lvl.palette[c];
@@ -60,8 +63,9 @@ static void put_rgb(FILE *f)
             row[x * 3 + 1] = ((p >> 5) & 31) << 3;
             row[x * 3 + 2] = ((p >> 10) & 31) << 3;
         }
-        fwrite(row, 1, sizeof(row), f);
     }
+    host_md_composite(img);
+    fwrite(img, 1, sizeof(img), f);
 }
 
 int main(int argc, char **argv)
@@ -97,7 +101,7 @@ int main(int argc, char **argv)
     r_screen = fbmem;
     for (k = 0; k < 2; k++) {
         rc[k].cpu = k;
-        r_arena(&rc[k], malloc(ARENA), ARENA, hash[k], 0);
+        r_arena(&rc[k], malloc(ARENA), ARENA, hash[k], getenv("MESH") != NULL);
     }
     view.cachegen = 1;
     view.vw = SCREENW;
@@ -124,9 +128,11 @@ int main(int argc, char **argv)
 
     if (getenv("PADSCRIPT")) load_pads(getenv("PADSCRIPT"));
     else if (!getenv("MODELTEST")) bot_start();     /* the demo bot plays */
-    if (getenv("START")) {          /* START="x y z yaw": where the player begins */
-        float x, y, z, a;
-        sscanf(getenv("START"), "%f %f %f %f", &x, &y, &z, &a);
+    if (getenv("MESH")) cfg.mesh = 1;
+    if (getenv("START")) {          /* START="x y z yaw [pitch]": where the player begins */
+        float x, y, z, a, pt = 0;
+        sscanf(getenv("START"), "%f %f %f %f %f", &x, &y, &z, &a, &pt);
+        player.pitch = (int)(pt * 65536 / 360);
         player.pos[0] = (fixed_t)(x * 65536); player.pos[1] = (fixed_t)(y * 65536);
         player.pos[2] = (fixed_t)(z * 65536); player.yaw = (int)(a * 65536 / 360) & 0xFFFF;
     }
@@ -152,6 +158,7 @@ int main(int argc, char **argv)
         if (getenv("FLAT")) cfg.textures = 0;
         view.textures = cfg.textures;
         view.lighting = cfg.lighting;
+        view.mesh = cfg.mesh;
         view.far = far_levels[cfg.far] << 16;
         game_eye(eye);
         view.time = fr * tpf;
@@ -162,16 +169,7 @@ int main(int argc, char **argv)
         g_build_scene();
         r_render(&rc[0], 0, view.vh / 2);
         r_render(&rc[1], view.vh / 2, view.vh);
-        {
-            char buf[48];
-            int hi = g_hud_text(buf);
-            memset(fbmem + (SCREENH - SBAR_H) * SCREENW, 0, SBAR_H * SCREENW * 2);
-            draw_text(4, SCREENH - SBAR_H + 1, buf, hi);
-        }
-        if (g_level_done)
-            intermission_draw(ps.kills, ps.total_monsters, g_level_ticks / 60, ps.secrets, ps.total_secrets);
-        if (menu_active)
-            menu_draw();
+        overlays_draw(0, 0, 150, fr < 120);
         if (getenv("LOG")) {
             int nm = 0;
             for (k = 0; k < MAX_ENTS; k++) nm += ents[k].type == ET_MONSTER;
@@ -180,7 +178,7 @@ int main(int argc, char **argv)
             printf("f %d t %u pos %d %d %d yaw %d hp %d sh %d kills %d alive %d draw %d zused %d parts %d phase %d\n",
                    fr, level_time, UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]),
                    player.yaw * 360 / 65536, ps.health, ps.shells, ps.kills, nm, scene.ndraw, scene.zused,
-                   scene.nparts, host_comm0);
+                   scene.nparts, dbg_phase);
         }
         if (getenv("DOORLOG")) {
             static int last[64];

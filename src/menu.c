@@ -1,8 +1,9 @@
-/* Pause menu and HUD text, drawn straight into the 32X framebuffer.
- * Text uses Quake's 8x8 console font at full 320-pixel width; rows are doubled
- * by the line table, so glyphs come out 8 pixels wide and 16 lines tall. */
-#include "game.h"
+/* Pause menu and HUD text, drawn on the Mega Drive text layer (mdlink.c):
+ * Quake's 8x8 console font on a 40 x 28 cell grid. The shading behind the
+ * menu and the hint is on the Mega Drive's other plane (main.c). */
+#include "g_local.h"
 #include "bot.h"
+#include "mdlink.h"
 
 int menu_active;
 static int cursor;
@@ -13,43 +14,6 @@ enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_MONSTERS, M_FPS, M_MOVE
 static const char *const cap_names[NUM_MONSTER_CAPS] = {
     "OFF", "1", "2", "3", "4", "6", "8", "UNLIMITED"
 };
-
-static inline volatile uint8_t *fb8(void) { return (volatile uint8_t *)r_screen; }
-
-static void draw_char(int x, int y, int c)
-{
-    const uint8_t *src = lvl.conchars + ((c >> 4) << 10) + ((c & 15) << 3);
-    volatile uint8_t *dst = fb8() + y * (SCREENW * 2) + x;
-    int r, i;
-    if ((c & 127) == ' ')
-        return;
-    for (r = 0; r < 8; r++) {
-        for (i = 0; i < 8; i++)
-            if (src[i])
-                dst[i] = src[i];
-        src += 128;
-        dst += SCREENW * 2;
-    }
-}
-
-void draw_text(int x, int y, const char *s, int hi)
-{
-    while (*s) {
-        draw_char(x, y, (uint8_t)*s | (hi ? 0x80 : 0));
-        x += 8;
-        s++;
-    }
-}
-
-static void shade_box(int x0, int y0, int x1, int y1)
-{
-    int x, y;
-    for (y = y0; y < y1; y++) {
-        volatile uint8_t *d = fb8() + y * (SCREENW * 2);
-        for (x = x0 + (y & 1); x < x1; x += 2)
-            d[x] = 0;
-    }
-}
 
 static char *fmt_int(char *p, int v)
 {
@@ -69,36 +33,36 @@ static char *cat(char *p, const char *s)
     return p;
 }
 
-void hud_draw(int x, int y, int fps10, int split)
+static int len(const char *s)
+{
+    int n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+/* text centred on the 40 columns */
+static void centre(int row, const char *s, int hi)
+{
+    md_text((MD_COLS - len(s)) >> 1, row, s, hi);
+}
+
+void hud_draw(int col, int row, int fps10)
 {
     char buf[32], *p = buf;
     p = fmt_int(p, hw_div(fps10, 10));
     *p++ = '.';
     p = fmt_int(p, fps10 - hw_div(fps10, 10) * 10);
-    p = cat(p, " FPS");
-    draw_text(x + 4, y + 2, buf, 0);
-    (void)split;
+    cat(p, " FPS");
+    md_text(col, row, buf, 0);
 }
 
-/* Quake's backtile around a reduced view window; each framebuffer word
- * holds two tile pixels, so the tile keeps its full horizontal detail */
-void border_draw(int x0, int y0, int w, int h)
+/* the status bar line: figures, or a message centred in its place */
+void sbar_draw(const char *buf, int hi, int message)
 {
-    int r, c;
-    for (r = 0; r < SCREENH; r++) {
-        volatile uint16_t *d = r_screen + r * SCREENW;
-        const uint8_t *row = lvl.backtile + ((r << 1) & 63) * 64;
-        int inside = r >= y0 && r < y0 + h;
-        for (c = 0; c < SCREENW; c++) {
-            int tx;
-            if (inside && c == x0) {
-                c = x0 + w - 1;
-                continue;
-            }
-            tx = (c << 1) & 63;
-            d[c] = (uint16_t)((row[tx] << 8) | row[tx + 1]);
-        }
-    }
+    if (message)
+        centre(MD_ROWS - 2, buf, hi);
+    else
+        md_text(0, MD_ROWS - 2, buf, hi);
 }
 
 /* names of pad buttons for the controls page and the hint */
@@ -116,15 +80,15 @@ const char *button_name(uint16_t b)
     }
 }
 
-/* controls reminder shown at start-up, with the current buttons */
-void hint_draw(void)
+/* controls reminder shown at start-up, with the current buttons, on the
+ * last two rows of the view (main.c shades them) */
+void hint_draw(int row)
 {
     char buf[48], *p;
-    shade_box(0, SCREENH - SBAR_H - 25, 320, SCREENH - SBAR_H);
     p = cat(buf, "D-PAD: MOVE/TURN  ");
     p = cat(p, button_name(cfg.bind[BIND_STRAFE]));
     cat(p, "+D-PAD: STRAFE/LOOK");
-    draw_text(8, SCREENH - SBAR_H - 23, buf, 0);
+    md_text(1, row, buf, 0);
     p = cat(buf, button_name(cfg.bind[BIND_FIRE]));
     p = cat(p, ":FIRE  ");
     p = cat(p, button_name(cfg.bind[BIND_JUMP]));
@@ -137,12 +101,14 @@ void hint_draw(void)
         p = cat(p, button_name(cfg.bind[BIND_FIRE]));
     }
     cat(p, ":WEAPON  START:MENU");
-    draw_text(8, SCREENH - SBAR_H - 12, buf, 0);
+    md_text(1, row + 1, buf, 0);
 }
 
 /* ------------------------------------------------------------ the menu */
 
 static int page;                    /* 0 the pause menu, 1 controls */
+
+int menu_page(void) { return page; }
 enum { C_FIRE, C_JUMP, C_STRAFE, C_WEAPON, C_LOOK, C_DEFAULTS, C_BACK, C_NUM };
 
 static const uint16_t pad_buttons[7] = { BTN_A, BTN_B, BTN_C, BTN_X, BTN_Y, BTN_Z, BTN_MODE };
@@ -265,12 +231,12 @@ void menu_input(int pressed)
     }
 }
 
-static void item(int i, int y, const char *name, const char *value)
+static void item(int i, int row, const char *name, const char *value)
 {
     if (i == cursor)
-        draw_char(28, y, 13);       /* arrow glyph */
-    draw_text(40, y, name, i == cursor);
-    draw_text(184, y, value, 0);
+        md_char(3, row, 13);        /* arrow glyph */
+    md_text(5, row, name, i == cursor);
+    md_text(23, row, value, 0);
 }
 
 static void controls_draw(void)
@@ -279,9 +245,8 @@ static void controls_draw(void)
         "Fire", "Jump", "Strafe / look", "Next weapon", "Look up/down", "Defaults", "Back"
     };
     char buf[32], *p;
-    int i, y0 = 2;
-    shade_box(16, 0, 304, SCREENH);
-    draw_text(160 - 8 * 8 / 2, y0, "CONTROLS", 1);
+    int i;
+    centre(0, "CONTROLS", 1);
     for (i = 0; i < C_NUM; i++) {
         p = buf;
         *p = 0;
@@ -297,12 +262,13 @@ static void controls_draw(void)
             }
         } else if (i == C_LOOK)
             cat(p, cfg.invert ? "INVERTED" : "NORMAL");
-        item(i, y0 + 12 + i * 8, names[i], buf);
+        item(i, 3 + i * 2, names[i], buf);
     }
-    draw_text(40, y0 + 12 + C_NUM * 8 + 4, "Left/Right picks a button.", 0);
-    draw_text(40, y0 + 12 + C_NUM * 8 + 13, "X Y Z MODE: 6-button pads.", 0);
+    md_text(5, 3 + C_NUM * 2 + 1, "Left/Right picks a button.", 0);
+    md_text(5, 3 + C_NUM * 2 + 3, "X Y Z MODE: 6-button pads.", 0);
 }
 
+/* the menu covers columns 2-37 of the whole screen (main.c shades them) */
 void menu_draw(void)
 {
     static const char *const names[M_NUM] = {
@@ -310,15 +276,13 @@ void menu_draw(void)
         "Monsters at once", "Show FPS", "Movement", "Controls...", "Demo (bot plays)", "Resume"
     };
     char buf[48], *p;
-    int i, y0 = 1;
+    int i;
 
     if (page) {
         controls_draw();
         return;
     }
-    /* the whole screen: the status bar is redrawn when the menu closes */
-    shade_box(16, 0, 304, SCREENH);
-    draw_text(160 - 6 * 8 / 2, y0, "PAUSED", 1);
+    centre(0, "PAUSED", 1);
     for (i = 0; i < M_NUM; i++) {
         p = buf;
         switch (i) {
@@ -354,34 +318,82 @@ void menu_draw(void)
         default: break;
         }
         *p = 0;
-        item(i, y0 + 10 + i * 8, names[i], buf);
+        item(i, 2 + i * 2, names[i], buf);
     }
-    draw_text(40, y0 + 10 + M_NUM * 8 + 2, "Up/Down select  Left/Right set", 0);
+    md_text(5, 2 + M_NUM * 2 + 1, "Up/Down select  Left/Right set", 0);
 }
 
-/* end of the level: Quake's intermission figures */
+/* end of the level: Quake's intermission figures, in a box at columns
+ * 8-31, rows 6-17 (main.c shades it) */
 void intermission_draw(int kills, int total, int secs, int secrets, int tsecrets)
 {
     char buf[32], *p;
-    int y = 30;
-    shade_box(64, y - 6, 256, y + 60);
-    draw_text(160 - 13 * 4, y, "LEVEL COMPLETE", 1);
-    p = cat(buf, "Time   ");
+    centre(7, "LEVEL COMPLETE", 1);
+    p = cat(buf, "Time    ");
     p = fmt_int(p, hw_div(secs, 60));
     *p++ = ':';
     secs -= hw_div(secs, 60) * 60;
     *p++ = '0' + hw_div(secs, 10);
     *p++ = '0' + secs - hw_div(secs, 10) * 10;
     *p = 0;
-    draw_text(96, y + 16, buf, 0);
-    p = cat(buf, "Kills  ");
+    md_text(12, 10, buf, 0);
+    p = cat(buf, "Kills   ");
     p = fmt_int(p, kills);
     *p++ = '/';
     fmt_int(p, total);
-    draw_text(96, y + 26, buf, 0);
+    md_text(12, 12, buf, 0);
     p = cat(buf, "Secrets ");
     p = fmt_int(p, secrets);
     *p++ = '/';
     fmt_int(p, tsecrets);
-    draw_text(96, y + 36, buf, 0);
+    md_text(12, 14, buf, 0);
+}
+
+/* the Mega Drive layer for this frame: the border, the status bar and the
+ * shading behind overlays on plane B (rebuilt only when they change), and
+ * all the text */
+void overlays_draw(int win_x, int win_y, int fps10, int hint)
+{
+    int vx0 = win_x >> 2, vx1 = (win_x + view.vw) >> 2;     /* in 8x8 cells */
+    int vy0 = win_y >> 2, vy1 = (win_y + view.vh) >> 2;
+    int sbar = MD_ROWS - 2;
+    uint32_t key = cfg.size | menu_active << 4 | menu_page() << 5 | (hint != 0) << 6
+                   | g_level_done << 7;
+    if (md_begin_back(key)) {
+        int r, c;
+        for (r = 0; r < MD_ROWS; r++)
+            for (c = 0; c < MD_COLS; c++) {
+                int v = MB_NONE, shade = 0;
+                if (r >= sbar)
+                    v = MB_BLACK;
+                else if (c < vx0 || c >= vx1 || r < vy0 || r >= vy1)
+                    v = MB_BORDER + ((r & 7) << 3) + (c & 7);
+                if (menu_active)
+                    shade = c >= 2 && c < 38;
+                else if (g_level_done)
+                    shade = c >= 8 && c < 32 && r >= 6 && r < 17;
+                else if (hint)
+                    shade = r >= sbar - 4 && r < sbar;
+                if (shade && v == MB_NONE)
+                    v = MB_SHADE;
+                else if (shade && v >= MB_BORDER)
+                    v += MB_BORDER_SHADED - MB_BORDER;
+                md_back(c, r, v);
+            }
+        md_end_back();
+    }
+    if (!menu_active) {
+        char buf[48];
+        int hi = g_hud_text(buf);
+        sbar_draw(buf, hi, ps.dead || (ps.msg && level_time < ps.msg_until));
+    }
+    if (g_level_done)
+        intermission_draw(ps.kills, ps.total_monsters, hw_div(g_level_ticks, 60), ps.secrets, ps.total_secrets);
+    if (menu_active)
+        menu_draw();
+    if (cfg.showfps)
+        hud_draw(menu_active ? 1 : vx0 + 1, menu_active ? 0 : vy0, fps10);
+    if (hint && !menu_active)
+        hint_draw(sbar - 3);
+    md_end_text();
 }

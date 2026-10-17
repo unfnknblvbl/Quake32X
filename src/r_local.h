@@ -17,7 +17,7 @@
 #define MAXSPANS    768         /* spans for one batch */
 #endif
 
-#define HASHSIZE    1024
+#define HASHSIZE    512
 #define MAX_SURFSIZE (128 * 128)
 
 #define PROJ        80          /* full-size focal length: 90 degree field of view */
@@ -53,6 +53,8 @@ typedef struct {
     fixed_t mipscale;                /* PROJ / proj: distance scale for mip choice */
     int     mesh;                    /* draw liquids as a see-through mesh */
     int     underwater;              /* the eye is inside a liquid */
+    int     cut_row0, cut_n;         /* rows the view weapon hides (mdlink.h) */
+    const uint8_t *cut_x;            /* cut_n pairs x0, x1 */
     /* moving brush models (doors, plats): the keyframe of fragments drawn
        for each, the offset still to apply, and camr for its vertices */
     uint8_t mkey[48];

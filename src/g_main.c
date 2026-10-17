@@ -1014,25 +1014,7 @@ GCODE void g_build_scene(void)
             scene.nparts++;
         }
     }
-    /* the view weapon: drawn last, without depth */
-#ifndef NO_GUN
-    if (!ps.dead && !cfg.fly && !g_level_done) {
-        drawent_t *d = &scene.draw[n];
-        fixed_t e[3];
-        eye_pos(e);
-        d->mdl = models[ps.weapon == IT_SUPER_SHOTGUN ? MDL_V_SHOT2 : MDL_V_SHOT];
-        d->frame = ps.weaponframe;
-        d->skin = 0;
-        d->org[0] = e[0]; d->org[1] = e[1]; d->org[2] = e[2];
-        d->yaw = player.yaw;
-        d->pitch = player.pitch;
-        d->rect[0] = 0; d->rect[1] = 0; d->rect[2] = view.vw; d->rect[3] = view.vh;
-        d->light = g_light_point(player.pos);
-        d->mode = DM_GUN;
-        d->dist = 0;
-        n++;
-    }
-#endif
+    /* the view weapon is a Mega Drive sprite (main.c, mdlink.c) */
     scene.ndraw = n;
 }
 

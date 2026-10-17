@@ -2,8 +2,8 @@
  *   ROM   0x02000000  4 MB  (SH-2 view of the cartridge while RV=0)
  *   SDRAM 0x06000000  256 KB
  * The SH-2 program (code + data) runs from SDRAM: the 32X boot ROM copies
- * it there using the Mars header. Level data and the game logic (cold
- * code: g_main, g_monst, bot) stay in ROM.
+ * it there using the Mars header. Level data and the cold code (game
+ * logic, the bot, the menu, the Mega Drive link, the sine table) stay in ROM.
  */
 OUTPUT_FORMAT("elf32-sh")
 OUTPUT_ARCH(sh)
@@ -30,8 +30,8 @@ SECTIONS
         __sdram_start = .;
         KEEP(*(.vectors))
         *(.text.hot .text.hot.*)
-        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .text.*)
-        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .rodata.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o) .text.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o) .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
         . = ALIGN(16);
@@ -48,6 +48,10 @@ SECTIONS
         *g_monst.o(.text .text.* .rodata .rodata.*)
         *g_mover.o(.text .text.* .rodata .rodata.*)
         *bot.o(.text .text.* .rodata .rodata.*)
+        *menu.o(.text .text.* .rodata .rodata.*)
+        *game.o(.text .text.* .rodata .rodata.*)
+        *mdlink.o(.text .text.* .rodata .rodata.*)
+        *tables.o(.text .text.* .rodata .rodata.*)
         . = ALIGN(16);
     } > rom
 

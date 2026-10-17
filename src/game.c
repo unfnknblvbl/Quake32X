@@ -18,8 +18,9 @@ uint16_t map_pad(uint16_t raw)
 const int far_levels[NUM_FAR] = { 256, 384, 512, 768, 1024, 1536, 2048, 3072, 8192 };
 /* screen sizes, like Quake's viewsize: the same view, smaller (10:7 window) */
 const viewsize_t view_sizes[NUM_SIZES] = {
-    { 160, 112, 100 }, { 144, 100, 90 }, { 128, 90, 80 },
-    { 112, 78, 70 }, { 96, 68, 60 }, { 80, 56, 50 },
+    /* on the Mega Drive's 8-pixel grid: the border is made of its tiles */
+    { 160, 104, 100 }, { 144, 96, 90 }, { 128, 80, 80 },
+    { 112, 72, 70 }, { 96, 64, 60 }, { 80, 56, 50 },
 };
 
 #define GRAVITY   (800 * 65536 / 3600)     /* units / tick^2 */

@@ -16,7 +16,9 @@
  *   system registers 2 + 1, VDP registers / palette 2 + 5
  *   divider: 39 clocks, reading early stalls
  * Both CPUs share one external bus; accesses are serialized.
- * The 68000 and Mega Drive VDP are not simulated (pad is scripted).
+ * Built with -DMD68K (tools/build_sim.sh), it also runs the Mega Drive
+ * side: the 68000 program, the joypad and the VDP layers mixed over the
+ * 32X picture (tools/mdsim.h). Without it, the pad goes straight to COMM12.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,6 +92,10 @@ static uint32_t watch_addr[4];
 static int watch_n[4], nwatch;
 static uint16_t pad_now;
 static int noirq;           /* test: SH-2 VBlank interrupts never arrive */
+static uint32_t phase_addr;  /* _dbg_phase: the demo phase for -vlog */
+#ifdef MD68K
+#include "mdsim.h"
+#endif
 /* render timing: GO = COMM4 write by master, slave done = COMM6 write, master done = its first COMM6 poll */
 static uint64_t t_go, sum_master, sum_slave, nframes_r, t_sdone, sum_serial, t_flipreq, sum_flipwait, nflip, sum_upd, sum_hud;
 static int master_done_seen;
@@ -896,6 +902,7 @@ static uint16_t parse_buttons(const char *s)
     for (; *s; s++) switch (*s) {
         case 'U': b |= 1; break; case 'D': b |= 2; break; case 'L': b |= 4; break; case 'R': b |= 8; break;
         case 'B': b |= 0x10; break; case 'C': b |= 0x20; break; case 'A': b |= 0x40; break; case 'S': b |= 0x80; break;
+        case 'Z': b |= 0x100; break; case 'Y': b |= 0x200; break; case 'X': b |= 0x400; break; case 'M': b |= 0x800; break;
     }
     return b;
 }
@@ -903,6 +910,7 @@ static uint16_t parse_buttons(const char *s)
 static void write_frame(FILE *f)
 {
     static uint8_t buf[320 * 224 * 3];
+    static uint16_t p32x[320 * 224];
     const uint8_t *fb = fbmem[fb_visible()];
     uint8_t *o = buf;
     int x, y;
@@ -911,9 +919,14 @@ static void write_frame(FILE *f)
         for (x = 0; x < 320; x++) {
             uint16_t p = cram[fb[(lo + x) & 0x1FFFF]];
             int r = p & 31, g = (p >> 5) & 31, b = (p >> 10) & 31;
+            p32x[y * 320 + x] = p;
             *o++ = (r << 3) | (r >> 2); *o++ = (g << 3) | (g >> 2); *o++ = (b << 3) | (b >> 2);
         }
     }
+#ifdef MD68K
+    if (md_on)
+        md_mix(buf, p32x, vdp_mode & 0x80);
+#endif
     fwrite(buf, 1, sizeof(buf), f);
 }
 
@@ -954,6 +967,12 @@ int main(int argc, char **argv)
         }
     }
     if (f) fclose(f);
+    f = fopen(argv[2], "r");
+    while (f && fgets(line, sizeof(line), f)) {
+        unsigned a; char t, name[128];
+        if (sscanf(line, "%x %c %127s", &a, &t, name) == 3 && !strcmp(name, "_dbg_phase")) phase_addr = a;
+    }
+    if (f) fclose(f);
     seconds = atof(argv[3]);
     for (i = 4; i < argc; i++) {
         if (!strcmp(argv[i], "-pad") && i + 3 < argc) {
@@ -963,6 +982,9 @@ int main(int argc, char **argv)
             shots[nshots].vbl = atoi(argv[i + 1]); shots[nshots].file = argv[i + 2]; nshots++; i += 2;
         } else if (!strcmp(argv[i], "-prof")) doprof = 1;
         else if (!strcmp(argv[i], "-noirq")) noirq = 1;
+#ifdef MD68K
+        else if (!strcmp(argv[i], "-nomd")) md_on = -1;
+#endif
         else if (!strcmp(argv[i], "-video") && i + 1 < argc) video = fopen(argv[++i], "wb");
         else if (!strcmp(argv[i], "-vlog") && i + 1 < argc) vlog = fopen(argv[++i], "w");
         else if (!strcmp(argv[i], "-audio") && i + 1 < argc) audio = fopen(argv[++i], "wb");
@@ -1008,6 +1030,12 @@ int main(int argc, char **argv)
         }
     }
     memset(comm, 0, sizeof(comm));
+#ifdef MD68K
+    if (md_on == 0)
+        md_init();
+    else
+        md_on = 0;
+#endif
 
     end = (uint64_t)(seconds * SH2_HZ);
     next_vbl = (uint64_t)VBLANK_LINE * LINE_CYCLES;
@@ -1015,6 +1043,13 @@ int main(int argc, char **argv)
         cpu_t *c = cpu[0].cyc <= cpu[1].cyc ? &cpu[0] : &cpu[1];
         uint64_t t = c->cyc;
         while (pwm_next <= t) pwm_tick();
+#ifdef MD68K
+        if (md_on) {
+            md_run(t);
+            if (vdp_invbl && t >= next_vbl - FRAME_CYCLES + (FRAME_LINES - VBLANK_LINE) * LINE_CYCLES)
+                md_vblank_end();
+        }
+#endif
         if (t >= next_vbl) {
             /* vblank: frame swap, IRQ, pad */
             if (fs_pending != 0xFFFF) {
@@ -1026,7 +1061,8 @@ int main(int argc, char **argv)
             if (video) write_frame(video);
             if (vlog) {
                 int w, k;
-                fprintf(vlog, "%llu %u %u", (unsigned long long)now_vbl, comm[0], comm[1]);
+                fprintf(vlog, "%llu %u %u", (unsigned long long)now_vbl,
+                        phase_addr ? sdram[phase_addr & 0x3FFFF] : comm[0], comm[1]);
                 for (w = 0; w < nwatch; w++)
                     for (k = 0; k < watch_n[w]; k++)
                         fprintf(vlog, " %d", (int32_t)rd_be(&sdram[(watch_addr[w] & 0x3FFFF) + 4 * k], 4));
@@ -1036,8 +1072,15 @@ int main(int argc, char **argv)
             pad_now = 0;
             for (i = 0; i < npads; i++)
                 if ((int)now_vbl >= pads[i].from && (int)now_vbl <= pads[i].to) pad_now |= pads[i].b;
-            comm[6] = pad_now;
-            comm[7]++;
+#ifdef MD68K
+            if (md_on)
+                md_vblank_start(pad_now);
+            else
+#endif
+            {
+                comm[6] = pad_now;
+                comm[7]++;
+            }
             if (now_vbl % 60 == 0) printf("t=%3llus fps %u.%u\n", (unsigned long long)now_vbl / 60, comm[1] / 10, comm[1] % 10);
             if (!noirq) cpu[0].vint_pending = cpu[1].vint_pending = 1;
             next_vbl += FRAME_CYCLES;
@@ -1130,9 +1173,10 @@ int main(int argc, char **argv)
         static int idx[PROF_SIZE];
         int k, no = 0;
         uint64_t tot = 0;
-        uint64_t *pa = hotcat ? profc[1][hotcat] : prof[1];
+        int hc = getenv("HOTCPU") ? atoi(getenv("HOTCPU")) : 1;
+        uint64_t *pa = hotcat ? profc[hc][hotcat] : prof[hc];
         for (k = 0; k < PROF_SIZE; k++) if (pa[k]) { idx[no++] = k; }
-        for (k = 0; k < PROF_SIZE; k++) tot += prof[1][k];
+        for (k = 0; k < PROF_SIZE; k++) tot += prof[hc][k];
         for (k = 0; k < hotn && k < no; k++) {
             int j, best = k;
             for (j = k + 1; j < no; j++) if (pa[idx[j]] > pa[idx[best]]) best = j;

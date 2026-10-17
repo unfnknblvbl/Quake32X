@@ -38,7 +38,7 @@ enum { BIND_FIRE, BIND_JUMP, BIND_STRAFE, BIND_WEAPON, NUM_BINDS };
 uint16_t map_pad(uint16_t raw);
 
 #define NUM_MONSTER_CAPS 8
-#define SBAR_H   10              /* status bar rows at the bottom of the screen */
+#define SBAR_H   8               /* status bar rows at the bottom of the screen (16 lines) */
 
 typedef struct { uint8_t w, h, pct, pad; } viewsize_t;
 
@@ -55,12 +55,13 @@ void game_respawn(void);
 /* menu.c */
 extern int menu_active;
 void menu_input(int pressed);
+int menu_page(void);
 void menu_draw(void);
-void hud_draw(int x, int y, int fps10, int split);
-void hint_draw(void);
+void hud_draw(int col, int row, int fps10);
+void hint_draw(int row);
+void sbar_draw(const char *buf, int hi, int message);
 const char *button_name(uint16_t b);
-void border_draw(int x0, int y0, int w, int h);
-void draw_text(int x, int y, const char *s, int hi);
 void intermission_draw(int kills, int total, int secs, int secrets, int tsecrets);
+void overlays_draw(int win_x, int win_y, int fps10, int hint);
 
 #endif

@@ -118,7 +118,7 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
     *held = 0;
     if (g_level_done) {
         phase = 4;
-        MARS_SYS_COMM0 = phase;
+        dbg_phase = phase;
         return;
     }
     if (ps.dead) {
@@ -168,12 +168,12 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
         }
         /* it stands its ground: walking at targets leads into pools */
         fighting = 1;
-        MARS_SYS_COMM0 = phase = 3;
+        dbg_phase = phase = 3;
         return;
     }
     target_since = 0;
     fighting = 0;
-    MARS_SYS_COMM0 = phase = 2;
+    dbg_phase = phase = 2;
 
     /* low on shells or health: fetch a useful item in sight */
     if (detour < 0 && !returning && (level_time & 15) == 0
@@ -241,14 +241,15 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
                 return;
             }
             if (w->flags & WP_LOOK) {
-                /* stop and look at something (the water) for a while */
-                int pitch = ANG(40);
+                /* stop and look at something (the water) for a while: yaw
+                   in flags, pitch in z, tenths of a second in x */
+                int pitch = ANG(w->z);
                 int err = turn_toward((w->flags >> 8) * ANG(2), held);
                 if (err < ANG(4)) {
                     *held &= ~(BTN_LEFT | BTN_RIGHT);
                     if (player.pitch < pitch - ANG(3))
                         look_toward(pitch, held);
-                    else if (++look_ticks > TICKS(2.5)) {
+                    else if (++look_ticks > w->x * 6) {
                         look_ticks = 0;
                         wp++;
                     }

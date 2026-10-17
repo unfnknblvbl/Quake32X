@@ -6,7 +6,8 @@ Plans the demo bot's route leg by leg with plan_route.py (closed doors as
 solid, lifts and bridges as floors), refines each leg with refine_route.py,
 and writes one route whose 'waypoints' carry the bot's flags:
 x, y, z, flags (WP_* in src/bot.h; the high byte is the mover for a wait,
-or yaw / 2 for a look).
+or yaw / 2 for a look; a look keeps its time in tenths of a second in x and
+its pitch in z).
 """
 import json
 import os
@@ -54,9 +55,13 @@ def main():
             if act[0] == 'touch':
                 wps.append([act[1], act[2], end[2], WP_TOUCH])
             elif act[0] == 'wait':
-                wps.append([wps[-1][0], wps[-1][1], end[2], WP_WAIT | (act[1] << 8)])
+                wps.append([end[0], end[1], end[2], WP_WAIT | (act[1] << 8)])
             elif act[0] == 'look':
-                wps.append([wps[-1][0], wps[-1][1], end[2], WP_LOOK | ((act[1] // 2) << 8)])
+                # yaw [, pitch down in degrees [, seconds]]: x holds the
+                # time in tenths, z the pitch (the bot stays where it is)
+                pitch = act[2] if len(act) > 2 else 40
+                secs = act[3] if len(act) > 3 else 2.5
+                wps.append([int(round(secs * 10)), end[1], pitch, WP_LOOK | ((act[1] // 2) << 8)])
         pos = leg.get('from_next') or leg['to']
         if i + 1 < len(spec['legs']) and 'from' in spec['legs'][i + 1]:
             pos = spec['legs'][i + 1]['from']

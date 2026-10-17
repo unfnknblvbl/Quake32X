@@ -162,6 +162,12 @@
 
 ! 0x800: all 68000 code, linked to run at 0x880800
         .incbin "build/m68k.bin"
+
+! 0x4000: the Mega Drive data (0x884000 for the 68000)
+        .org    0x4000
+        .global _md_data
+_md_data:
+        .incbin "build/md_data.bin"
         .balign 16
 
 !-----------------------------------------------------------------------

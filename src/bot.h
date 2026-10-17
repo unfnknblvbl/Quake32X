@@ -19,4 +19,6 @@ void bot_start(void);                   /* restart the level with the bot playin
 void bot_stop(void);                    /* hand the controls back */
 void bot_tick(uint16_t *held, uint16_t *pressed);
 
+extern volatile uint8_t dbg_phase;     /* main.c: for the simulator's log */
+
 #endif
