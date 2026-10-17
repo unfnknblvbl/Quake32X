@@ -814,6 +814,7 @@ int main(int argc, char **argv)
         } else if (!strcmp(argv[i], "-shot") && i + 2 < argc) {
             shots[nshots].vbl = atoi(argv[i + 1]); shots[nshots].file = argv[i + 2]; nshots++; i += 2;
         } else if (!strcmp(argv[i], "-prof")) doprof = 1;
+        else if (!strcmp(argv[i], "-noirq")) noirq = 1;
         else if (!strcmp(argv[i], "-hot") && i + 1 < argc) { doprof = 1; hotn = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "-hotcat") && i + 1 < argc) { hotcat = atoi(argv[++i]); }
     }
