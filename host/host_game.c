@@ -10,9 +10,10 @@
 #include "../src/g_local.h"
 #include "../src/bot.h"
 #include "../src/levels.h"
+#include "../src/playdemo.h"
 
 int32_t host_div_result;
-int g_mode, cur_level;
+
 uint16_t host_comm0;
 volatile uint16_t *r_fb, *r_screen;
 static uint16_t fbmem[SCREENW * SCREENH];
@@ -121,7 +122,11 @@ int main(int argc, char **argv)
         g_change_parms();
     }
     if (getenv("GOD")) cfg.god = 1;
+
+    if (getenv("PLAYDEMO")) g_mode = GM_DEMO;   /* the level's demo instead of a game */
     g_init();
+    if (g_mode == GM_DEMO && !pd_start()) { fprintf(stderr, "no demo\n"); return 1; }
+    if (getenv("KEYS")) ps.items = atoi(getenv("KEYS"));
     if (getenv("MODELTEST")) {
         /* a monster (CL_ARMY 1 / CL_DOG 2) DIST units ahead of the start,
            posed on frame FRAME, facing YAW; no AI */
@@ -159,7 +164,10 @@ int main(int argc, char **argv)
         if (pressed & BTN_START) { menu_active ^= 1; pressed &= ~BTN_START; }
         if (menu_active)
             menu_input(pressed);
-        else
+        else if (g_mode == GM_DEMO) {
+            for (k = 0; k < tpf; k++)
+                if (!pd_tick()) { printf("demo over at f %d\n", fr); fr = frames; break; }
+        } else
             for (k = 0; k < tpf && (!getenv("MODELTEST") || getenv("HUNT")); k++) {
                 if (bot_active) bot_tick(&held, &pressed);
                 else { held = map_pad(ppad); if (k == 0) pressed = map_pad(pressed); }
@@ -173,7 +181,11 @@ int main(int argc, char **argv)
         view.lighting = cfg.lighting;
         view.mesh = cfg.mesh;
         view.far = far_levels[cfg.far] << 16;
-        game_eye(eye);
+        if (g_mode == GM_DEMO) {
+            pd_update();
+            pd_eye(eye);
+        } else
+            game_eye(eye);
         view.time = fr * tpf;
         r_setup_view(eye, player.yaw, player.pitch);
         leaf = r_pointleaf(eye);
@@ -202,6 +214,13 @@ int main(int argc, char **argv)
                            UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]));
                 last[k] = st;
             }
+        }
+        if (getenv("MOVLOG") && fr % atoi(getenv("MOVLOG")) == 0) {
+            printf("f %d player %d %d %d:", fr, UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]));
+            for (k = 0; k < nmovers; k++)
+                if (mover_off[k][0] || mover_off[k][1] || mover_off[k][2])
+                    printf(" m%d(%d,%d,%d)", k, UNITS(mover_off[k][0]), UNITS(mover_off[k][1]), UNITS(mover_off[k][2]));
+            printf("\n");
         }
         if (g_request) {            /* the level again (one level here) */
             if (getenv("LOG")) printf("request %d at f %d\n", g_request, fr);

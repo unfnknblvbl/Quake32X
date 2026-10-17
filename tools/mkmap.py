@@ -749,7 +749,7 @@ def main():
     demo = None
     if demo_path:
         import mkdemo
-        demo = mkdemo.convert(pak[demo_path], ents, models, movers, E)
+        demo = mkdemo.convert(pak[demo_path], ents, models, movers, '>')   # big-endian on any host
     gd = mkents.add_game_data(blob, pak, pal, ents, models, fx, E, sys.modules[__name__], ANORMS, movers,
                               world, *(demo['needs'] if demo else ((), ())))
     for k, (o, n) in gd.items():

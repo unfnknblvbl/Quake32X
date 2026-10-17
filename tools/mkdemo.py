@@ -8,7 +8,7 @@ sound numbers become the level blob's (MDL_, SND_: tools/mkents.py), the
 brush models that move become movers (tools/movers.py), the view entity's
 updates become the view, and the messages it does not use are left out.
 
-Stream (big-endian):
+Stream (always big-endian; src/playdemo.c reads it byte by byte):
   header: u32 nframes, u32 nbaselines, u32 baselines ofs, u32 frames ofs,
           u32 strings ofs, u32 max entities in a frame
   baselines: nbaselines x 12 bytes { u8 model, frame, skin, pitch,
@@ -86,6 +86,7 @@ def convert(data, ents, models, movers, E='>'):
 
     started = False
     last_time = 0.0
+    pending_rec = bytearray()
     for f in frames:
         msgs = f['msgs']
         rec = bytearray()
@@ -201,7 +202,12 @@ def convert(data, ents, models, movers, E='>'):
             elif k == 'foundsecret':
                 rec += struct.pack(E + 'BBH', 11, 5, 0)
         if time is None:
+            # a block with no time of its own (reliable messages: kills,
+            # prints): its records go with the next frame
+            pending_rec += rec
             continue
+        rec = pending_rec + rec
+        pending_rec = bytearray()
         started = True
         pitch, yaw = f['angles'][0], f['angles'][1]
         out += struct.pack(E + 'HHH', int(round(time * 100)), int(round(pitch * 65536 / 360)) & 0xFFFF,

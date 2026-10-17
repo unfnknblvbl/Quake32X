@@ -26,7 +26,7 @@ typedef struct {
     uint32_t nframes, nbase, base_ofs, frames_ofs, strings_ofs, max_ents;
 } pdhdr_t;
 
-static const pdhdr_t *hdr;
+static pdhdr_t hdr_mem, *const hdr = &hdr_mem;
 static const uint8_t *demo, *fp;    /* the stream; the next frame */
 static int frame_no;
 
@@ -266,7 +266,12 @@ GCODE int pd_start(void)
     if ((int)sizeof(pdmem_t) > mv_scratch_size)
         return 0;
     demo = lvl.base + h->lump[LVL_DEMO].ofs;
-    hdr = (const pdhdr_t *)demo;
+    hdr_mem.nframes = rd32(demo);
+    hdr_mem.nbase = rd32(demo + 4);
+    hdr_mem.base_ofs = rd32(demo + 8);
+    hdr_mem.frames_ofs = rd32(demo + 12);
+    hdr_mem.strings_ofs = rd32(demo + 16);
+    hdr_mem.max_ents = rd32(demo + 20);
     prev = PDM.ent_a;
     cur = PDM.ent_b;
     fp = demo + hdr->frames_ofs;

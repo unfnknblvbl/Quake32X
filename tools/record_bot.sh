@@ -6,12 +6,13 @@
 # demo phase, FPS, player, player stats, teleport count and class).
 #   tools/record_bot.sh OUT [seconds] [menu keys]
 # Menu keys, one press every 12 vblanks from 1 s in (U D L R A B C S): the
-# default opens the menu, turns textures off, makes water see-through, makes
-# the screen two sizes smaller (80%), and starts Demo.
+# default opens the menu (over the attract demo), turns textures off, makes
+# water see-through, makes the screen two sizes smaller (80%), and starts
+# Demo.
 set -e
 cd "$(dirname "$0")/.."
 OUT=$1; SECS=${2:-150}
-KEYS=${3:-SRDDRDDLLDDDDDDR}
+KEYS=${3:-SDRDDRDDLLDDDDDDR}
 mkdir -p "$OUT"
 make -s >/dev/null
 /opt/toolchains/sega/bin/sh-elf-nm -n build/q32x.elf > build/syms.txt

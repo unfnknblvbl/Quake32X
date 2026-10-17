@@ -344,6 +344,8 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
         an_in.active = analog && !bot_active;
         if (an_in.active)
             an_update();
+        if (bot_active && g_level_done > TICKS(6))
+            g_request = REQ_DEMO;           /* the bot is through: the attract demo again */
         while (ticks-- > 0) {
             if (bot_active)
                 bot_tick(&held, &pressed);
