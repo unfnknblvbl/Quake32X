@@ -24,7 +24,30 @@ void host_bad_texel(const frec_t *fr, int s, int t, int x, int y)
     abort();
 }
 
-extern int bot_skip_menu;
+
+/* PADSCRIPT=file: lines "from to buttons" (frames; U D L R A B C S) instead of the bot */
+static struct { int a, b; uint16_t btn; } pads[256];
+static int npads;
+static void load_pads(const char *fn)
+{
+    FILE *f = fopen(fn, "r");
+    char bs[32];
+    while (f && npads < 256 && fscanf(f, "%d %d %31s", &pads[npads].a, &pads[npads].b, bs) == 3) {
+        uint16_t b = 0;
+        for (char *c = bs; *c; c++)
+            b |= *c == 'U' ? BTN_UP : *c == 'D' ? BTN_DOWN : *c == 'L' ? BTN_LEFT : *c == 'R' ? BTN_RIGHT
+               : *c == 'A' ? BTN_A : *c == 'B' ? BTN_B : *c == 'C' ? BTN_C : *c == 'S' ? BTN_START : 0;
+        pads[npads++].btn = b;
+    }
+    if (f) fclose(f);
+}
+static uint16_t pad_at(int fr)
+{
+    uint16_t b = 0;
+    for (int i = 0; i < npads; i++)
+        if (fr >= pads[i].a && fr <= pads[i].b) b |= pads[i].btn;
+    return b;
+}
 
 static void put_rgb(FILE *f)
 {
@@ -84,7 +107,6 @@ int main(int argc, char **argv)
     scene.zbuf = zbuf_mem;
     if (getenv("CAP")) cfg.monsters = atoi(getenv("CAP"));
     g_init();
-    bot_init();
     if (getenv("MODELTEST")) {
         /* a monster (CL_ARMY 1 / CL_DOG 2) DIST units ahead of the start,
            posed on frame FRAME, facing YAW; no AI */
@@ -97,21 +119,31 @@ int main(int argc, char **argv)
         e->yaw = (getenv("YAW") ? atoi(getenv("YAW")) : 270) * 65536 / 360;
         e->frame = getenv("FRAME") ? atoi(getenv("FRAME")) : 0;
         e->nextthink = 0xFFFFFFF;
-        bot_skip_menu = 1;
         cfg.monsters = 0;
     }
-    if (getenv("NOMENU")) bot_skip_menu = 1;
 
+    if (getenv("PADSCRIPT")) load_pads(getenv("PADSCRIPT"));
+    else if (!getenv("MODELTEST")) bot_start();     /* the demo bot plays */
+    if (getenv("START")) {          /* START="x y z yaw": where the player begins */
+        float x, y, z, a;
+        sscanf(getenv("START"), "%f %f %f %f", &x, &y, &z, &a);
+        player.pos[0] = (fixed_t)(x * 65536); player.pos[1] = (fixed_t)(y * 65536);
+        player.pos[2] = (fixed_t)(z * 65536); player.yaw = (int)(a * 65536 / 360) & 0xFFFF;
+    }
     for (int fr = 0; fr < frames; fr++) {
-        uint16_t pressed = 0, held = 0;
+        uint16_t pressed = 0, held = 0, ppad = 0;
         fixed_t eye[3];
-        bot_menu(fr * tpf, &pressed);
+        if (npads) {
+            ppad = pad_at(fr);
+            pressed = ppad & ~pad_at(fr - 1);
+        }
         if (pressed & BTN_START) { menu_active ^= 1; pressed &= ~BTN_START; }
         if (menu_active)
             menu_input(pressed);
         else
             for (k = 0; k < tpf && !getenv("MODELTEST"); k++) {
-                bot_tick(&held, &pressed);
+                if (bot_active) bot_tick(&held, &pressed);
+                else { held = map_pad(ppad); if (k == 0) pressed = map_pad(pressed); }
                 if (!g_level_done)
                     game_tick(held);
                 g_tick(held, pressed);
@@ -137,7 +169,7 @@ int main(int argc, char **argv)
             draw_text(4, SCREENH - SBAR_H + 1, buf, hi);
         }
         if (g_level_done)
-            intermission_draw(ps.kills, ps.total_monsters, g_level_ticks / 60);
+            intermission_draw(ps.kills, ps.total_monsters, g_level_ticks / 60, ps.secrets, ps.total_secrets);
         if (menu_active)
             menu_draw();
         if (getenv("LOG")) {
@@ -149,6 +181,16 @@ int main(int argc, char **argv)
                    fr, level_time, UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]),
                    player.yaw * 360 / 65536, ps.health, ps.shells, ps.kills, nm, scene.ndraw, scene.zused,
                    scene.nparts, host_comm0);
+        }
+        if (getenv("DOORLOG")) {
+            static int last[64];
+            for (k = 0; k < 48; k++) {
+                int st = mv_state(k);
+                if (fr && st != last[k])
+                    printf("   mover %d state %d -> %d at f %d pos %d %d %d\n", k, last[k], st, fr,
+                           UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]));
+                last[k] = st;
+            }
         }
         if (getenv("MLOG") && fr % atoi(getenv("MLOG")) == 0)
             for (k = 0; k < MAX_ENTS; k++) {

@@ -53,6 +53,11 @@ typedef struct {
     fixed_t mipscale;                /* PROJ / proj: distance scale for mip choice */
     int     mesh;                    /* draw liquids as a see-through mesh */
     int     underwater;              /* the eye is inside a liquid */
+    /* moving brush models (doors, plats): the keyframe of fragments drawn
+       for each, the offset still to apply, and camr for its vertices */
+    uint8_t mkey[48];
+    fixed_t mres[48][3];
+    int32_t mcamr[48][3];
 } view_t;
 
 typedef struct { fixed_t x, y, z; } vec3_t;
@@ -211,6 +216,7 @@ static inline void wait_fb(rcpu_t *rc)
 /* r_main.c */
 void r_init(void);
 void r_setup_view(fixed_t org[3], int yaw, int pitch);
+void r_mover_cam(int nmovers);
 void r_markleaves(int leaf);
 int  r_pointleaf(const fixed_t p[3]);
 void r_render(rcpu_t *rc, int row0, int row1);

@@ -1,41 +1,42 @@
-/* The walkthrough demo's player: works the pause menu at the start, then
- * follows a planned route to the exit, stopping to fight whatever is in
- * sight. It plays through the pad, like a person would: the D-pad to turn
+/* The demo bot (pause menu, Demo): plays E1M1 from the start, following
+ * a planned route to the exit, pressing the buttons and riding the lifts
+ * the level needs, and stopping to fight whatever is in sight. It plays through the pad, like a person would: the D-pad to turn
  * and walk, C to fire. Its shots get Quake's normal vertical auto-aim; its
  * only other help is cfg.god (it takes a quarter of the damage). */
-#ifdef DEMO_BOT
 #include "g_local.h"
 #include "bot.h"
+
+int bot_active;
 
 #define TURN_STEP  ANG(2.67)            /* game.c turns 160 degrees a second */
 
 static int wp, stuck_ticks, last_x, last_y, fighting, phase;
 static int target = -1, retarget, detour = -1, detour_t, unstick;
 static uint32_t ignore_until[MAX_ENTS];  /* targets it could not hurt */
-static int target_hp, target_since;
+static int target_hp, target_since, look_ticks;
+static int returning;                   /* walking back to where a detour began */
+static fixed_t det_from[3];
 
-/* the menu: open it, switch to flat shading, show the monster setting */
-static const struct { int t; uint16_t b; } menu_script[] = {
-    { 40, BTN_START },                  /* open the pause menu */
-    { 85, BTN_RIGHT },                  /* Textures: OFF (flat) */
-    { 115, BTN_DOWN }, { 130, BTN_DOWN }, { 145, BTN_DOWN }, { 160, BTN_DOWN },
-    { 175, BTN_DOWN },                  /* Monsters at once: 2 */
-    { 290, BTN_START },                 /* resume */
-    { -1, 0 }
-};
-static int menu_i;
-int bot_skip_menu;
-int bot_dbg_wp(void) { return wp | (detour + 1) << 8; }
-
-void bot_init(void)
+void bot_start(void)
 {
+    g_init();
+    game_respawn();
+    memset(ignore_until, 0, sizeof(ignore_until));
     wp = 0;
-    menu_i = 0;
+    target = detour = -1;
+    stuck_ticks = unstick = look_ticks = returning = 0;
     cfg.god = 1;
-    phase = 1;
 #ifdef BOT_CAP
     cfg.monsters = BOT_CAP;             /* measurement builds: another cap */
 #endif
+    phase = 2;
+    bot_active = 1;
+}
+
+void bot_stop(void)
+{
+    bot_active = 0;
+    cfg.god = 0;
 }
 
 static int visible_from_eye(const fixed_t c[3])
@@ -66,6 +67,31 @@ static int pick_target(void)
     return best;
 }
 
+/* floor all the way along the straight line from a to b (both at standing
+ * height): no drops of more than a step, no pools */
+static int walkable(const fixed_t a[3], const fixed_t b[3])
+{
+    int n = vlen_units(a, b) / 16 + 1, i;
+    for (i = 1; i <= n; i++) {
+        fixed_t p[3], q[3];
+        trace_t tr;
+        p[0] = a[0] + hw_div(b[0] - a[0], n) * i;
+        p[1] = a[1] + hw_div(b[1] - a[1], n) * i;
+        p[2] = a[2];
+        q[0] = p[0]; q[1] = p[1]; q[2] = p[2] - FX(48);
+        g_trace(0, p, q, &tr);
+        if (tr.frac == 0x10000 || g_contents(0, tr.end) <= CONTENTS_WATER)
+            return 0;
+    }
+    return 1;
+}
+
+static void end_detour(void)
+{
+    detour = -1;
+    returning = 1;
+}
+
 /* A + up/down to look toward pitch (positive looks down) */
 static void look_toward(int pitch, uint16_t *held)
 {
@@ -87,27 +113,9 @@ static int turn_toward(uint16_t yaw, uint16_t *held)
     return err < 0 ? -err : err;
 }
 
-/* menu presses, once a frame (real time: the game is paused meanwhile) */
-void bot_menu(uint32_t now, uint16_t *pressed)
-{
-    static uint32_t t0;
-    if (bot_skip_menu) {
-        while (menu_script[menu_i].t >= 0) menu_i++;
-        return;
-    }
-    if (!t0)
-        t0 = now ? now : 1;
-    if (menu_script[menu_i].t >= 0 && (int)(now - t0) >= menu_script[menu_i].t) {
-        *pressed |= menu_script[menu_i].b;
-        menu_i++;
-    }
-}
-
 void bot_tick(uint16_t *held, uint16_t *pressed)
 {
     *held = 0;
-    if (menu_script[menu_i].t >= 0)
-        return;                             /* still working the menu */
     if (g_level_done) {
         phase = 4;
         MARS_SYS_COMM0 = phase;
@@ -117,6 +125,8 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
         if (level_time - ps.died > TICKS(3))
             *pressed |= BTN_B;              /* start the level again */
         wp = 0;
+        detour = -1;
+        returning = 0;
         return;
     }
 
@@ -166,7 +176,8 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
     MARS_SYS_COMM0 = phase = 2;
 
     /* low on shells or health: fetch a useful item in sight */
-    if (detour < 0 && (level_time & 15) == 0) {
+    if (detour < 0 && !returning && (level_time & 15) == 0
+        && !(wp < bot_nroute && (bot_route[wp].flags & (WP_WAIT | WP_LOOK | WP_TOUCH)))) {
         int i, bestd = 400;
         for (i = 0; i < MAX_ENTS; i++) {
             const ent_t *e = &ents[i];
@@ -182,18 +193,22 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
             c[1] = e->org[1] + (e->mins[1] ? 0 : FX(16));
             c[2] = e->org[2] + FX(24);
             d = vlen_units(c, player.pos);
-            if (d < bestd && visible_from_eye(c)) {
+            c[2] = player.pos[2];
+            if (d < bestd && visible_from_eye(c) && walkable(player.pos, c)) {
                 bestd = d;
                 detour = i;
             }
         }
         detour_t = level_time;
+        det_from[0] = player.pos[0];
+        det_from[1] = player.pos[1];
+        det_from[2] = player.pos[2];
     }
     if (detour >= 0 && ents[detour].type != ET_ITEM)
-        detour = -1;
+        end_detour();
     if (detour >= 0 && level_time - detour_t > TICKS(5)) {
         ignore_until[detour] = level_time + TICKS(60);     /* could not get there */
-        detour = -1;
+        end_detour();
     }
 
     /* walk the route (or to the item) */
@@ -204,10 +219,44 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
             const ent_t *e = &ents[detour];
             gx = e->org[0] + (e->mins[0] ? 0 : FX(16));
             gy = e->org[1] + (e->mins[1] ? 0 : FX(16));
+        } else if (returning) {
+            /* back onto the route the way it came */
+            gx = det_from[0];
+            gy = det_from[1];
+            if (UNITS(gx - player.pos[0]) < 12 && UNITS(gx - player.pos[0]) > -12
+                && UNITS(gy - player.pos[1]) < 12 && UNITS(gy - player.pos[1]) > -12) {
+                returning = 0;
+                return;
+            }
         } else {
             const bot_wp_t *w = &bot_route[wp];
             fixed_t dx = FX(w->x) - player.pos[0], dy = FX(w->y) - player.pos[1];
-            if (UNITS(dx < 0 ? -dx : dx) < 16 && UNITS(dy < 0 ? -dy : dy) < 16) {
+            int near = w->flags & WP_TOUCH ? 3 : 16;
+            if (w->flags & WP_WAIT) {
+                /* stand still until the lift or bridge has finished moving */
+                if (mv_state(w->flags >> 8) == MS_TOP) {
+                    wp++;
+                    stuck_ticks = 0;
+                }
+                return;
+            }
+            if (w->flags & WP_LOOK) {
+                /* stop and look at something (the water) for a while */
+                int pitch = ANG(40);
+                int err = turn_toward((w->flags >> 8) * ANG(2), held);
+                if (err < ANG(4)) {
+                    *held &= ~(BTN_LEFT | BTN_RIGHT);
+                    if (player.pitch < pitch - ANG(3))
+                        look_toward(pitch, held);
+                    else if (++look_ticks > TICKS(2.5)) {
+                        look_ticks = 0;
+                        wp++;
+                    }
+                }
+                return;
+            }
+            if ((UNITS(dx < 0 ? -dx : dx) < near && UNITS(dy < 0 ? -dy : dy) < near)
+                || ((w->flags & WP_TOUCH) && stuck_ticks > 10)) {
                 jump = w->flags & WP_JUMP;
                 wp++;
                 stuck_ticks = 0;
@@ -236,13 +285,19 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
         /* stuck: jump, sidestep, and in the end give up on this waypoint */
         if (UNITS(player.pos[0]) == last_x && UNITS(player.pos[1]) == last_y && (*held & BTN_UP)) {
             stuck_ticks++;
-            if (stuck_ticks == 20)
-                *held |= BTN_B;
-            if (stuck_ticks % 50 == 40)
-                unstick = 12;
+            if (detour < 0 && !returning && (bot_route[wp].flags & WP_TOUCH))
+                ;                           /* pressing a button: blocked is fine */
+            else {
+                if (stuck_ticks == 20)
+                    *held |= BTN_B;
+                if (stuck_ticks % 50 == 40)
+                    unstick = 12;
+            }
             if (stuck_ticks > 300) {
                 if (detour >= 0)
-                    detour = -1;
+                    end_detour();
+                else if (returning)
+                    returning = 0;
                 else if (wp + 1 < bot_nroute)
                     wp++;
                 stuck_ticks = 0;
@@ -253,4 +308,5 @@ void bot_tick(uint16_t *held, uint16_t *pressed)
         last_y = UNITS(player.pos[1]);
     }
 }
-#endif
+
+int bot_dbg_wp(void) { return wp | (detour + 1) << 8; }

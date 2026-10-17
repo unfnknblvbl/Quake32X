@@ -36,6 +36,32 @@ typedef struct {
 
 #define MF_ROTATE 8
 
+/* a door, secret door, plat or button (ROM), written by tools/mkents.py */
+typedef struct {
+    uint8_t  cls, sounds, targetname, target;
+    uint8_t  msg, group, nkeys, startpos;   /* group: the linked doors' leader */
+    uint16_t flags, firstkey;               /* keyframes in LVL_MKEYS */
+    int16_t  speed, wait10, dmg, health;    /* wait in tenths, -1 = stay */
+    int16_t  hull1, hull2;                  /* clip hull head nodes */
+    int16_t  mins[3], maxs[3];              /* the brush at offset 0 */
+    int16_t  pos[3][3];                     /* path points (offsets) */
+    uint16_t pad;
+} lmover_t;                                                         /* 56 */
+
+/* a trigger volume (ROM) */
+typedef struct {
+    uint8_t  cls, sounds, targetname, target, killtarget, msg;
+    uint16_t flags;
+    int16_t  wait10, health, count, owner;  /* owner: the door/plat of a field */
+    int16_t  mins[3], maxs[3];
+    int16_t  facing;                        /* yaw the player must face, -1000 any */
+    int16_t  dest[3], dest_yaw;             /* teleporters */
+    uint16_t pad;
+} ltrigger_t;                                                       /* 40 */
+
+#define MAX_MOVERS   48
+#define MAX_TRIGGERS 64
+
 /* ------------------------------------------------------------------ entities */
 
 enum { ET_FREE, ET_ITEM, ET_MONSTER, ET_CORPSE };
@@ -84,6 +110,7 @@ typedef struct {
     uint32_t quad_finished, suit_finished;
     uint32_t pain_finished, died;
     int16_t  kills, total_monsters, items_got;
+    int16_t  secrets, total_secrets;
     const char *msg;
     uint32_t msg_until;
 } pstate_t;
@@ -157,6 +184,7 @@ fixed_t g_frand(void);               /* 0 .. 1 (16.16) */
 fixed_t g_crand(void);               /* -1 .. 1 */
 void g_damage_player(int dmg, const fixed_t *from);
 void g_damage(ent_t *e, int dmg);
+void g_hurt(ent_t *e, int dmg);
 void g_particles(const fixed_t org[3], const fixed_t dir[3], int color, int count);
 void g_teleport_fx(const fixed_t org[3]);
 ent_t *g_spawn(void);
@@ -176,6 +204,7 @@ typedef struct {
     fixed_t end[3];
     fixed_t normal[3];
     uint8_t allsolid, startsolid, inopen, inwater;
+    int     mover;                   /* the mover hit, -1 none */
 } trace_t;
 
 int  g_contents(int hull, const fixed_t p[3]);
@@ -186,6 +215,23 @@ int  g_light_point(const fixed_t p[3]);
 int  g_leaf_visible(const fixed_t p[3]);
 void g_relink(ent_t *e);
 #define LEAF_VISIBLE(l) ((l) > 0 && BIT_TEST(vis_leafs, (l)))
+
+/* g_mover.c: doors, plats, buttons, triggers */
+extern const lmover_t *lmovers;
+extern int nmovers;
+extern fixed_t mover_off[MAX_MOVERS][3];
+void mv_init(void);
+void mv_tick(void);                  /* move movers, fire timers */
+void mv_touch_player(void);          /* triggers, buttons, door messages */
+void mv_touch_monster(ent_t *e);     /* door fields */
+void mv_damage(int mover, int dmg);  /* shot: secret doors */
+int  mv_shoot_triggers(const fixed_t src[3], const fixed_t dir[3], fixed_t maxlen);
+void mv_render_state(void);          /* keyframes and offsets for the renderer */
+int  mv_state(int mover);            /* MS_ below */
+const char *mv_string(int id);
+enum { MS_TOP, MS_BOTTOM, MS_UP, MS_DOWN };
+int  g_point_solid(int hull, const fixed_t p[3]);   /* world or a mover */
+int  g_mover_solid(int m, int hull, const fixed_t p[3]);
 
 /* g_monst.c */
 void m_spawn(ent_t *e, int cls, int hunting);

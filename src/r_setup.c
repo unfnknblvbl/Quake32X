@@ -23,6 +23,8 @@ void face_zsetup(frec_t *fr)
         n[0] = pl->n[0]; n[1] = pl->n[1]; n[2] = pl->n[2];
         dcam = dot16(pl->n, view.org) - pl->dist;
     }
+    if (f->pad)
+        dcam -= dot16(n, view.mres[(f->pad & 0xFF) - 1]);   /* a mover's plane moved */
     if (dcam < 0x2000) dcam = 0x2000;
     distinv = hw_div64((int64_t)1 << 43, dcam);
     A = dot16(n, view.r80s5);
@@ -82,6 +84,8 @@ int face_setup(rcpu_t *rc, frec_t *fr)
         n[0] = pl->n[0]; n[1] = pl->n[1]; n[2] = pl->n[2];
         dcam = dot16(pl->n, view.org) - pl->dist;
     }
+    if (f->pad)
+        dcam -= dot16(n, view.mres[(f->pad & 0xFF) - 1]);
     if (dcam < 0x2000) dcam = 0x2000;
     distinv = hw_div64((int64_t)1 << 43, dcam);
     A = dot16(n, view.r80s5);
@@ -95,6 +99,8 @@ int face_setup(rcpu_t *rc, frec_t *fr)
     {
         fixed_t vr = dot16(ti->s, view.right), vd = dot16(ti->s, view.down), vf = dot16(ti->s, view.fwd);
         sc = dot16(ti->s, view.org) + ti->s[3] - (f->tmins[0] << 16);
+        if (f->pad)
+            sc -= dot16(ti->s, view.mres[(f->pad & 0xFF) - 1]);     /* texture moves with it */
         sref = sc + fixmul(vr, fr->refv.x) + fixmul(vd, fr->refv.y) + fixmul(vf, fr->refv.z);
         sr = fixmul(vr, view.k24);
         sd = fixmul(vd, view.k24);
@@ -102,6 +108,8 @@ int face_setup(rcpu_t *rc, frec_t *fr)
     {
         fixed_t vr = dot16(ti->t, view.right), vd = dot16(ti->t, view.down), vf = dot16(ti->t, view.fwd);
         tc = dot16(ti->t, view.org) + ti->t[3] - (f->tmins[1] << 16);
+        if (f->pad)
+            tc -= dot16(ti->t, view.mres[(f->pad & 0xFF) - 1]);
         tref = tc + fixmul(vr, fr->refv.x) + fixmul(vd, fr->refv.y) + fixmul(vf, fr->refv.z);
         tr = fixmul(vr, view.k24);
         td = fixmul(vd, view.k24);

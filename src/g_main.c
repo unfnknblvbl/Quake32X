@@ -315,6 +315,7 @@ GCODE void g_init(void)
     memset(particles, 0, sizeof(particles));
     memset(qstate, 0, sizeof(qstate));
     memset(&ps, 0, sizeof(ps));
+    mv_init();
     ps.health = 100;
     ps.shells = 25;
     ps.weapons = IT_SHOTGUN;
@@ -421,10 +422,8 @@ GCODE void g_damage_player(int dmg, const fixed_t *from)
     (void)from;
     if (ps.dead)
         return;
-#ifdef DEMO
     if (cfg.god)
-        dmg = (dmg + 3) >> 2;            /* demo player: quarter damage */
-#endif
+        dmg = (dmg + 3) >> 2;            /* the demo bot: quarter damage */
     save = (ps.armortype * dmg + 99) / 100;
     if (save > ps.armor)
         save = ps.armor;
@@ -444,6 +443,22 @@ GCODE void g_damage_player(int dmg, const fixed_t *from)
         snd_start(SND_PLAYER_PAIN1 + (g_rand() % 3), NULL, 255);
         ps.pain_finished = level_time + TICKS(0.5);
     }
+}
+
+/* damage from the world (crushing doors): no Quad Damage */
+GCODE void g_hurt(ent_t *e, int dmg)
+{
+    if (e->type != ET_MONSTER || e->health <= 0)
+        return;
+    e->health -= dmg;
+    if (e->health <= 0) {
+        m_die(e);
+        ps.kills++;
+        if (e->queue >= 0)
+            qstate[e->queue] = Q_DEAD;
+        return;
+    }
+    m_pain(e, dmg);
 }
 
 GCODE void g_damage(ent_t *e, int dmg)
@@ -567,6 +582,7 @@ static void fire_bullets(int count, fixed_t sx, fixed_t sy_)
         g_trace(0, src, end, &tr);
         wd = tr.frac * 2048;                        /* units, 16.16 */
         best = wd;
+        mv_shoot_triggers(src, d, wd);              /* shootable switches */
         for (i = 0; i < MAX_ENTS; i++) {
             ent_t *e = &ents[i];
             fixed_t mn[3], mx[3], t;
@@ -590,6 +606,8 @@ static void fire_bullets(int count, fixed_t sx, fixed_t sy_)
                 g_particles(at, NULL, 73, 6);           /* blood */
             } else if (tr.frac < 0x10000) {
                 g_particles(at, NULL, 0, 4);            /* puff */
+                if (tr.mover >= 0)
+                    mv_damage(tr.mover, 4);             /* secret doors open when shot */
             }
         }
     }
@@ -762,7 +780,7 @@ GCODE void g_tick(int buttons, int pressed)
     int i;
     if (g_level_done) {
         /* intermission: the world stops; B or C after two seconds restarts */
-        if (++g_level_done > TICKS(2) && (pressed & (BTN_B | BTN_C))) {
+        if (++g_level_done > TICKS(2) && (pressed & (ACT_JUMP | ACT_FIRE))) {
             g_init();
             game_respawn();
         }
@@ -772,25 +790,29 @@ GCODE void g_tick(int buttons, int pressed)
 
     if (ps.dead) {
         /* respawn at the start after two seconds and a button */
-        if (level_time - ps.died > TICKS(2) && (pressed & (BTN_B | BTN_C))) {
+        if (level_time - ps.died > TICKS(2) && (pressed & (ACT_JUMP | ACT_FIRE))) {
             g_init();                   /* single player: the level starts again */
             game_respawn();
             return;
         }
     } else {
-        if ((pressed & BTN_C) && (buttons & BTN_A)) {
-            /* A + C: next weapon */
+        if ((pressed & ACT_WEAPON)
+            || (!cfg.bind[BIND_WEAPON] && (pressed & ACT_FIRE) && (buttons & ACT_STRAFE))) {
+            /* next weapon: its own button, or strafe + fire */
             if (ps.weapon == IT_SHOTGUN && (ps.weapons & IT_SUPER_SHOTGUN) && ps.shells >= 2)
                 ps.weapon = IT_SUPER_SHOTGUN;
             else
                 ps.weapon = IT_SHOTGUN;
-        } else if ((buttons & BTN_C) && !(buttons & BTN_A) && level_time >= ps.attack_finished
+        } else if ((buttons & ACT_FIRE) && !(!cfg.bind[BIND_WEAPON] && (buttons & ACT_STRAFE))
+                   && level_time >= ps.attack_finished
                    && !cfg.fly) {
             player_attack();
         }
         touch_items();
+        mv_touch_player();
         check_exit();
     }
+    mv_tick();
     if (ps.weaponframe && level_time - ps.weapon_tick >= 6) {
         ps.weapon_tick = level_time;
         if (++ps.weaponframe > 6)
@@ -806,6 +828,7 @@ GCODE void g_tick(int buttons, int pressed)
         if (e->type == ET_MONSTER && level_time >= e->nextthink) {
             m_think(e);
             g_relink(e);
+            mv_touch_monster(e);
         } else if (e->type == ET_CORPSE && level_time >= e->nextthink) {
             m_think(e);
             g_relink(e);
@@ -910,6 +933,7 @@ GCODE void g_build_scene(void)
 {
     int i, n = 0;
     scene.ndraw = 0;
+    mv_render_state();
     for (i = 0; i < MAX_ENTS; i++) {
         ent_t *e = &ents[i];
         drawent_t *d;
@@ -991,6 +1015,7 @@ GCODE void g_build_scene(void)
         }
     }
     /* the view weapon: drawn last, without depth */
+#ifndef NO_GUN
     if (!ps.dead && !cfg.fly && !g_level_done) {
         drawent_t *d = &scene.draw[n];
         fixed_t e[3];
@@ -1007,6 +1032,7 @@ GCODE void g_build_scene(void)
         d->dist = 0;
         n++;
     }
+#endif
     scene.ndraw = n;
 }
 

@@ -57,6 +57,10 @@ def main():
     ap.add_argument('--start', type=float, nargs=3)
     ap.add_argument('--wet', action='store_true')
     ap.add_argument('--append')
+    ap.add_argument('--block', type=float, nargs=6, action='append', default=[],
+                    help='x0 y0 z0 x1 y1 z1: a closed door (solid for this leg)')
+    ap.add_argument('--floor', type=float, nargs=6, action='append', default=[],
+                    help='x0 y0 z0 x1 y1 z1: a bridge or lift in place (solid, can be stood on)')
     args = ap.parse_args()
     pak = mkmap.read_pak(args.pak)
     m = mkmap.parse_bsp(pak[args.bsp.lower()])
@@ -68,7 +72,12 @@ def main():
     zs = np.arange(math.floor(mins[2] / ZSTEP) * ZSTEP, maxs[2], ZSTEP)
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     pts = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1) + 0.5
-    solid = (hull_contents(m, pts) == mkmap.CONTENTS_SOLID).reshape(X.shape)
+    solid = (hull_contents(m, pts) == mkmap.CONTENTS_SOLID)
+    for b in args.block + args.floor:   # brush box grown by the player hull
+        lo = np.array([b[0] - 16, b[1] - 16, b[2] - 32])
+        hi = np.array([b[3] + 16, b[4] + 16, b[5] + 24])
+        solid |= np.all((pts >= lo) & (pts <= hi), axis=1)
+    solid = solid.reshape(X.shape)
     empty = ~solid
     stand = np.zeros_like(empty)
     stand[:, :, 1:] = empty[:, :, 1:] & solid[:, :, :-1]

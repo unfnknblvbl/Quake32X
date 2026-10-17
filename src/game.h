@@ -22,7 +22,20 @@ typedef struct {
     int mesh;       /* liquids drawn as a see-through mesh */
     int monsters;   /* index into the "Monsters at once" values (g_main.c) */
     int god;        /* demo player: takes a quarter of the damage */
+    uint16_t bind[4];   /* pad buttons for the actions below; next weapon 0 =
+                           strafe + fire together */
+    int invert;     /* look up/down inverted */
 } settings_t;
+
+enum { BIND_FIRE, BIND_JUMP, BIND_STRAFE, BIND_WEAPON, NUM_BINDS };
+
+/* the game reads actions on these bits (map_pad translates the pad):
+   strafe/look = A, jump = B, fire = C, next weapon = X */
+#define ACT_STRAFE  BTN_A
+#define ACT_JUMP    BTN_B
+#define ACT_FIRE    BTN_C
+#define ACT_WEAPON  BTN_X
+uint16_t map_pad(uint16_t raw);
 
 #define NUM_MONSTER_CAPS 8
 #define SBAR_H   10              /* status bar rows at the bottom of the screen */
@@ -45,8 +58,9 @@ void menu_input(int pressed);
 void menu_draw(void);
 void hud_draw(int x, int y, int fps10, int split);
 void hint_draw(void);
+const char *button_name(uint16_t b);
 void border_draw(int x0, int y0, int w, int h);
 void draw_text(int x, int y, const char *s, int hi);
-void intermission_draw(int kills, int total, int secs);
+void intermission_draw(int kills, int total, int secs, int secrets, int tsecrets);
 
 #endif

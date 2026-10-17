@@ -101,6 +101,21 @@ void r_setup_view(fixed_t org[3], int yaw, int pitch)
                                   + (int64_t)org[2] * view.r16[i][2]) >> 13);
 }
 
+/* camr for each mover's vertices: the camera seen from the mover's frame */
+void r_mover_cam(int n)
+{
+    int m, i;
+    for (m = 0; m < n; m++) {
+        fixed_t o[3];
+        o[0] = view.org[0] - view.mres[m][0];
+        o[1] = view.org[1] - view.mres[m][1];
+        o[2] = view.org[2] - view.mres[m][2];
+        for (i = 0; i < 3; i++)
+            view.mcamr[m][i] = (int32_t)(((int64_t)o[0] * view.r16[i][0] + (int64_t)o[1] * view.r16[i][1]
+                                          + (int64_t)o[2] * view.r16[i][2]) >> 13);
+    }
+}
+
 /* which side of a node's plane is p on (1 = back) */
 static inline int node_side(const lnode_t *node, const fixed_t *p)
 {
@@ -220,6 +235,13 @@ static void walk_leaf(rcpu_t *rc, int leaf, int clipflags)
         const lface_t *f = &lvl.faces[fi];
         const lplane_t *pl = &lvl.planes[f->plane];
         fixed_t d = dot16(pl->n, view.org) - pl->dist;
+        if (f->pad) {
+            /* a moving model's fragment: only its current keyframe */
+            int m = (f->pad & 0xFF) - 1;
+            if ((f->pad >> 8) != view.mkey[m])
+                continue;
+            d -= dot16(pl->n, view.mres[m]);
+        }
         if ((d < 0) != ((f->flags & FF_PLANEBACK) != 0))
             continue;
         add_cand(rc, fi, clipflags);

@@ -294,12 +294,15 @@ def main():
     vert_index = {}
     out_verts = []
 
-    def vindex(p):
-        key = tuple(v13_3(c) for c in p)
-        if key not in vert_index:
-            vert_index[key] = len(out_verts)
-            out_verts.append(key)
-        return vert_index[key]
+    def vindex(p, mover=-1, key=0):
+        # a moving model's vertices are its own: the renderer shifts them by
+        # that mover's offset (the vertex record's last word is mover + 1)
+        q = tuple(v13_3(c) for c in p)
+        k = (mover, key) + q
+        if k not in vert_index:
+            vert_index[k] = len(out_verts)
+            out_verts.append(q + (mover + 1,))
+        return vert_index[k]
 
     lightdata = bytearray()
     face_light_cache = {}
@@ -371,7 +374,7 @@ def main():
             in_air.update(marks)
     underwater = in_liquid - in_air
 
-    def add_face(fi, pts, orig_pts, side_flag, allow_empty=False):
+    def add_face(fi, pts, orig_pts, side_flag, allow_empty=False, mover=-1, key=0):
         f = bspfaces[fi]
         ti = f[4]
         flags = tex_flags(ti) | side_flag
@@ -393,7 +396,7 @@ def main():
         # remove collinear duplicates in quantized space
         vl = []
         for p in pts:
-            vi = vindex(p)
+            vi = vindex(p, mover, key)
             if not vl or vl[-1] != vi:
                 vl.append(vi)
         if len(vl) > 1 and vl[0] == vl[-1]:
@@ -404,7 +407,7 @@ def main():
             vl = []
         face_recs.append(dict(plane=f[0], flags=flags, texinfo=ti,
                               tmins=tmins, ext=ext, lofs=lofs, lit=lit, unlit=unlit,
-                              vl=vl))
+                              vl=vl, tag=(mover + 1) | (key << 8) if mover >= 0 else 0))
         return len(face_recs) - 1
 
     # world faces: keep BSP face numbering for model 0 faces
@@ -421,43 +424,26 @@ def main():
         face_map[fi] = idx
 
     # ------------------------------------------------ bmodels -> leaf fragments
-    VISIBLE_BMODELS = ('func_door', 'func_door_secret', 'func_plat', 'func_button',
-                       'func_wall', 'func_illusionary', 'func_episodegate',
-                       'func_bossgate', 'func_train')
-    leaf_frags = {}
-    nfrag = 0
+    # Brush models are clipped into the world leaves. A moving one (doors,
+    # plats, buttons: tools/movers.py) is clipped once per keyframe along its
+    # path; its fragments carry (mover + 1) | key << 8, and the renderer only
+    # draws the keyframe nearest the mover's position, shifted by the rest.
+    import movers as movers_mod
+    movers = movers_mod.build_movers(ents, models)
+    groups = []                     # (model index, offset, mover, key)
+    for mi_, mv in enumerate(movers):
+        for k, off in enumerate(mv['keys']):
+            groups.append((mv['model'], off, mi_, k))
     for e in ents:
         mdl = e.get('model', '')
-        cls = e.get('classname', '')
-        if not mdl.startswith('*') or cls not in VISIBLE_BMODELS:
-            continue
-        mi = int(mdl[1:])
+        if e.get('classname') in movers_mod.STATIC_CLASSES and mdl.startswith('*') and movers_mod.present(e):
+            groups.append((int(mdl[1:]), (0.0, 0.0, 0.0), -1, 0))
+    assert len(movers) < 255 and all(len(mv['keys']) < 256 for mv in movers)
+    leaf_frags = {}
+    nfrag = 0
+    for mi, org, mover, key in groups:
         mo = models[mi]
-        mins = mo[0:3]
-        maxs = mo[3:6]
-        org = [0.0, 0.0, 0.0]
-        if cls == 'func_plat':
-            h = float(e['height']) if 'height' in e else (maxs[2] - mins[2] - 8)
-            if 'targetname' not in e:
-                org[2] -= h
-        if cls == 'func_door':
-            # no game logic yet: show doors in their open position so the
-            # level can be explored (movedir/lip as in Quake's doors.qc)
-            ang = float(e.get('angle', '0'))
-            if ang == -1:
-                d = (0.0, 0.0, 1.0)
-            elif ang == -2:
-                d = (0.0, 0.0, -1.0)
-            else:
-                a = math.radians(ang)
-                d = (math.cos(a), math.sin(a), 0.0)
-            lip = float(e.get('lip', '8'))
-            size = [maxs[k] - mins[k] - 2 for k in range(3)]
-            dist = abs(d[0]) * size[0] + abs(d[1]) * size[1] + abs(d[2]) * size[2] - lip
-            org = [org[k] + d[k] * dist for k in range(3)]
-        if 'origin' in e:
-            o = [float(x) for x in e['origin'].split()]
-            org = [org[i] + o[i] for i in range(3)]
+        org = list(org)
         firstface, numfaces = mo[14], mo[15]
         for fi in range(firstface, firstface + numfaces):
             f = bspfaces[fi]
@@ -474,12 +460,10 @@ def main():
                     leaf = -1 - node
                     if leafs[leaf][0] == CONTENTS_SOLID:
                         continue
-                    idx = add_face(fi, poly, pts0, side)
+                    idx = add_face(fi, poly, pts0, side, mover=mover, key=key)
                     if idx >= 0:
-                        # bmodel offsets do not move texture space: adjust by
-                        # shifting the polygon back for extents was done using
-                        # pts0; texture coords use world pos -> fold org into
-                        # texinfo is not possible, so store org per fragment.
+                        # texture space and the plane move with the model:
+                        # adjusted copies per offset are made below
                         face_recs[idx]['org'] = org
                         leaf_frags.setdefault(leaf, []).append(idx)
                         nfrag += 1
@@ -556,7 +540,8 @@ def main():
     hdr_fields = ['planes', 'nodes', 'leafs', 'marksurf', 'faces', 'fverts', 'verts',
                   'texinfo', 'textures', 'light', 'vis', 'leaffrags', 'clipnodes',
                   'palette', 'colormap', 'conchars', 'skytex', 'facesph', 'nodeparent',
-                  'backtile', 'ents', 'models', 'anorms', 'sounds']
+                  'backtile', 'ents', 'models', 'anorms', 'sounds', 'movers', 'mkeys',
+                  'triggers', 'strings']
     HDR_SIZE = 4 + 4 + len(hdr_fields) * 8 + 64
     blob.data += b'\0' * HDR_SIZE
     offs = {}
@@ -623,7 +608,8 @@ def main():
         assert -32768 <= rec['tmins'][0] < 32768 and -32768 <= rec['tmins'][1] < 32768
         b += struct.pack(E + 'HBBHHhhHHiBBH', first, len(rec['vl']), rec['flags'], rec['plane'],
                          rec['texinfo'], rec['tmins'][0], rec['tmins'][1],
-                         rec['ext'][0], rec['ext'][1], rec['lofs'], rec['lit'], rec['unlit'], 0)
+                         rec['ext'][0], rec['ext'][1], rec['lofs'], rec['lit'], rec['unlit'],
+                         rec.get('tag', 0))
     offs['faces'] = blob.add(b)
     counts['faces'] = len(face_recs)
     print('faces:', len(face_recs), 'world:', nworld)
@@ -637,12 +623,15 @@ def main():
         if not rec['vl']:
             sph = (0, 0, 0, -1)
         else:
-            pts = [out_verts[v] for v in rec['vl']]
+            pts = [out_verts[v][:3] for v in rec['vl']]
             c = [(min(p[k] for p in pts) + max(p[k] for p in pts)) / 2.0 / 8.0 for k in range(3)]
             ci = [int(round(x)) for x in c]
             r = max(math.sqrt(sum((p[k] / 8.0 - ci[k]) ** 2 for k in range(3))) for p in pts)
-            sph = (ci[0], ci[1], ci[2], int(math.ceil(r)) + 1)
-        b += struct.pack(E + 'HBBBBH4h', first, nv, rec['flags'], rec['lit'], rec['unlit'], 0, *sph)
+            # a mover's fragment is drawn up to half a keyframe step away
+            slack = movers_mod.KEY_STEP // 2 + 1 if rec.get('tag') else 0
+            sph = (ci[0], ci[1], ci[2], int(math.ceil(r)) + 1 + slack)
+        b += struct.pack(E + 'HBBBBH4h', first, nv, rec['flags'], rec['lit'], rec['unlit'],
+                         rec.get('tag', 0), *sph)
         first += nv
     offs['facesph'] = blob.add(b, 16)
     counts['facesph'] = len(face_recs)
@@ -656,7 +645,7 @@ def main():
     # verts: x,y,z 13.3 + pad -> 8 bytes
     b = bytearray()
     for v in out_verts:
-        b += struct.pack(E + '4h', v[0], v[1], v[2], 0)
+        b += struct.pack(E + '4h', v[0], v[1], v[2], v[3])
     offs['verts'] = blob.add(b)
     counts['verts'] = len(out_verts)
     assert len(out_verts) < 65536
@@ -725,7 +714,7 @@ def main():
     # game data: entities, flat-coloured models, sounds (tools/mkents.py)
     import mkents
     from anorms import ANORMS
-    gd = mkents.add_game_data(blob, pak, pal, ents, models, fx, E, sys.modules[__name__], ANORMS)
+    gd = mkents.add_game_data(blob, pak, pal, ents, models, fx, E, sys.modules[__name__], ANORMS, movers)
     for k, (o, n) in gd.items():
         offs[k] = o
         counts[k] = n

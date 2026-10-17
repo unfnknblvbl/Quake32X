@@ -1,8 +1,6 @@
 /* Quake 32X - main loops for the two SH-2s */
 #include "g_local.h"
-#ifdef DEMO_BOT
 #include "bot.h"
-#endif
 
 extern const uint8_t level_data[];
 extern uint8_t _bss_end[];  /* linker symbol __bss_end */
@@ -11,6 +9,7 @@ volatile uint16_t pad_latch;     /* OR of every pad sample, set by the VBlank IR
 volatile uint16_t *r_fb;
 volatile uint16_t *r_screen = (volatile uint16_t *)0x24000200;
 static int border_dirty;            /* framebuffers whose border needs redrawing */
+static int sbar_force;              /* status bar redraws after the menu closes */
 static uint8_t *arena_base;         /* per-CPU memory: liquid buffers + surface cache */
 static int arena_each, arena_mesh = -1;
 static int win_x, win_y;            /* view window origin (rendered pixels) */
@@ -193,18 +192,17 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
     seen = *latch | pad_poll;
     *latch = 0;
     pad_poll = 0;
-    if (pad & BTN_NOPAD) pad = 0;
-    if (seen & BTN_NOPAD) seen = 0;
+    /* 0xF000 = no pad; bit 12 alone marks a 6-button pad */
+    if ((pad & BTN_NOPAD) == BTN_NOPAD) pad = 0;
+    if ((seen & BTN_NOPAD) == BTN_NOPAD) seen = 0;
+    pad &= 0x0FFF;
+    seen &= 0x0FFF;
     pressed = (seen | pad) & ~*oldpad;
     *oldpad = pad;
     *last_tick = now;
     frame_now = now;
 #ifdef DEMO_CAMERA
     pressed = demo_update(now, ticks, pressed);    /* real time: the camera keeps pace */
-#endif
-#ifdef DEMO_BOT
-    pressed = 0;
-    bot_menu(now, &pressed);
 #endif
     if (ticks > 6) ticks = 6;
     if (hint_time > 0) {
@@ -216,22 +214,21 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
         menu_active ^= 1;
         pressed &= ~BTN_START;
     }
-    if (menu_active)
-        menu_input(pressed);
-    else {
-#ifdef DEMO_BOT
-        uint16_t held = 0;
-#endif
+    if (menu_active) {
+        menu_input(pressed);                /* the menu reads the pad itself */
+        sbar_force = 2;
+    } else {
+        /* the player's buttons as actions (Controls page), or the bot's */
+        uint16_t held = map_pad(pad);
+        pressed = map_pad(pressed);
         while (ticks-- > 0) {
-#ifdef DEMO_BOT
-            bot_tick(&held, &pressed);
-            pad = held;
-#endif
+            if (bot_active)
+                bot_tick(&held, &pressed);
 #ifndef DEMO_CAMERA
             if (!g_level_done)
-                game_tick(pad);
+                game_tick(held);
 #endif
-            g_tick(pad, pressed);
+            g_tick(held, pressed);
             pressed = 0;
         }
     }
@@ -307,14 +304,11 @@ void pri_main(void)
 
     game_init();
     scene.zbuf = zbuf_mem;
-#ifdef DEMO_CAMERA
-    cfg.monsters = 0;                   /* the camera route has no player to fight */
+#if defined(DEMO_CAMERA) || defined(START_POS)
+    cfg.monsters = 0;                   /* camera routes and benchmark views: no monsters */
 #endif
     g_init();
     snd_init();
-#ifdef DEMO_BOT
-    bot_init();
-#endif
     view.cachegen = 1;
     view.mipbias = 0;
     apply_settings();
@@ -373,9 +367,12 @@ void pri_main(void)
             }
         }
 
-        sbar_draw(border_dirty > 0 || menu_active);
+        if (!menu_active) {
+            sbar_draw(sbar_force > 0 || border_dirty > 0);
+            if (sbar_force) sbar_force--;
+        }
         if (g_level_done)
-            intermission_draw(ps.kills, ps.total_monsters, hw_div(g_level_ticks, 60));
+            intermission_draw(ps.kills, ps.total_monsters, hw_div(g_level_ticks, 60), ps.secrets, ps.total_secrets);
         if (menu_active)
             menu_draw();
         if (cfg.showfps)

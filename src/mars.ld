@@ -30,8 +30,8 @@ SECTIONS
         __sdram_start = .;
         KEEP(*(.vectors))
         *(.text.hot .text.hot.*)
-        *(EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .text.*)
-        *(EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .rodata.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .text.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o) .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
         . = ALIGN(16);
@@ -46,6 +46,7 @@ SECTIONS
         *(.romtext .romtext.*)
         *g_main.o(.text .text.* .rodata .rodata.*)
         *g_monst.o(.text .text.* .rodata .rodata.*)
+        *g_mover.o(.text .text.* .rodata .rodata.*)
         *bot.o(.text .text.* .rodata .rodata.*)
         . = ALIGN(16);
     } > rom

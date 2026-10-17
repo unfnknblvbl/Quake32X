@@ -1,0 +1,24 @@
+{
+  "comment": "The demo bot's route through E1M1, leg by leg (tools/build_botroute.py). Closed doors and secret doors are solid while planning; the lift and the bridge are floors where they stand when the bot uses them. Actions at the end of a leg: touch (walk into a button or trigger at x y), wait (until mover n has finished moving to its far end), look (stand and look at yaw, down 40 degrees, for a few seconds).",
+  "blocks": {
+    "secret10": [193, 2305, 17, 207, 2431, 143], "secret13": [753, 2433, -111, 767, 2527, -1],
+    "secret14": [513, 2241, -143, 575, 2255, -49], "secret21": [1105, 993, -271, 1119, 1055, -161],
+    "secret23": [737, 481, 81, 751, 543, 191], "secret41": [-319, 2881, -79, -305, 2943, -1],
+    "secret43": [657, 49, 49, 719, 63, 111], "door38": [1089, 961, -271, 1103, 1087, -161],
+    "door29": [753, 1873, -431, 895, 1887, -321]
+  },
+  "legs": [
+    {"to": [-44, 576, 24], "floors": [[-63, 513, -239, 63, 639, -1]],
+     "then": [["touch", -52, 576], ["wait", 2]]},
+    {"from": [-44, 576, -206], "to": [112, 1240, -182], "floors": [[1, 2395, -95, 319, 2641, -81]],
+     "then": [["look", 0], ["look", 180]]},
+    {"to": [-48, 2680, -56], "floors": [[1, 2395, -95, 319, 2641, -81]],
+     "then": [["touch", -48, 2670], ["wait", 7]]},
+    {"to": [830, 2690, -72], "floors": [[1, 2633, -95, 319, 2879, -81]]},
+    {"to": [800, 2008, -152], "then": [["touch", 800, 1996]]},
+    {"to": [1272, 2048, -216], "then": [["touch", 1284, 2048]]},
+    {"to": [1232, 2488, -280], "then": [["touch", 1232, 2498]]},
+    {"to": [1316, 1136, -256], "open": ["door29"]},
+    {"to": [1312, 544, -238], "open": ["door29", "door38"]}
+  ]
+}

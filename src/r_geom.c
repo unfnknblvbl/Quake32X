@@ -71,16 +71,17 @@ static NOINLINE void xform_vert(rcpu_t *rc, vcache_t *e, int vi)
 {
     const lvert_t *v = &lvl.verts[vi];
     int32_t vx = v->x, vy = v->y, vz = v->z;
+    const int32_t *camr = v->pad ? view.mcamr[v->pad - 1] : view.camr;   /* movers: shifted */
     fixed_t x, y, z;
     int oc = 0;
 
     rc->vxforms++;
     x = ((int16_t)vx * view.r16[0][0] + (int16_t)vy * view.r16[0][1] + (int16_t)vz * view.r16[0][2]
-         - view.camr[0]) >> 1;
+         - camr[0]) >> 1;
     y = ((int16_t)vx * view.r16[1][0] + (int16_t)vy * view.r16[1][1] + (int16_t)vz * view.r16[1][2]
-         - view.camr[1]) >> 1;
+         - camr[1]) >> 1;
     z = ((int16_t)vx * view.r16[2][0] + (int16_t)vy * view.r16[2][1] + (int16_t)vz * view.r16[2][2]
-         - view.camr[2]) >> 1;
+         - camr[2]) >> 1;
     e->v.x = x;
     e->v.y = y;
     e->v.z = z;

@@ -79,7 +79,49 @@ enum {
     SND_PLAYER_LAND = 32,
     SND_TINK1 = 33,
     SND_RIC1 = 34,
+    SND_DRCLOS4 = 35,
+    SND_DOORMV1 = 36,
+    SND_HYDRO1 = 37,
+    SND_HYDRO2 = 38,
+    SND_STNDR1 = 39,
+    SND_STNDR2 = 40,
+    SND_BASESEC1 = 41,
+    SND_BASESEC2 = 42,
+    SND_LATCH2 = 43,
+    SND_WINCH2 = 44,
+    SND_AIRDOOR1 = 45,
+    SND_AIRDOOR2 = 46,
+    SND_PLAT1 = 47,
+    SND_PLAT2 = 48,
+    SND_MEDPLAT1 = 49,
+    SND_MEDPLAT2 = 50,
+    SND_AIRBUT1 = 51,
+    SND_SWITCH21 = 52,
+    SND_SWITCH02 = 53,
+    SND_SWITCH04 = 54,
+    SND_TALK = 55,
+    SND_SECRET = 56,
+    SND_TRIGGER1 = 57,
     SND_NUM
+};
+
+enum {
+    MV_DOOR = 0,
+    MV_DOOR_SECRET = 1,
+    MV_PLAT = 2,
+    MV_BUTTON = 3,
+    MV_NUM
+};
+
+enum {
+    TR_ONCE = 0,
+    TR_MULTIPLE = 1,
+    TR_SECRET = 2,
+    TR_COUNTER = 3,
+    TR_TELEPORT = 4,
+    TR_DOOR_FIELD = 5,
+    TR_PLAT_FIELD = 6,
+    TR_NUM
 };
 
 #endif

@@ -69,7 +69,18 @@ SOUNDS = [
     'player/pain1', 'player/pain2', 'player/pain3', 'player/death1',
     'player/plyrjmp8', 'player/land',
     'weapons/tink1', 'weapons/ric1',
+    # doors, secret doors, plats, buttons, triggers
+    'doors/drclos4', 'doors/doormv1', 'doors/hydro1', 'doors/hydro2',
+    'doors/stndr1', 'doors/stndr2', 'doors/basesec1', 'doors/basesec2',
+    'doors/latch2', 'doors/winch2', 'doors/airdoor1', 'doors/airdoor2',
+    'plats/plat1', 'plats/plat2', 'plats/medplat1', 'plats/medplat2',
+    'buttons/airbut1', 'buttons/switch21', 'buttons/switch02', 'buttons/switch04',
+    'misc/talk', 'misc/secret', 'misc/trigger1',
 ]
+
+MOVER_IDS = ['func_door', 'func_door_secret', 'func_plat', 'func_button']
+TRIGGER_IDS = ['trigger_once', 'trigger_multiple', 'trigger_secret', 'trigger_counter',
+               'trigger_teleport', 'door_field', 'plat_field']
 
 SPAWNFLAG_NOT_MEDIUM = 512
 
@@ -97,7 +108,13 @@ def write_header(path):
             if folder in ('soldier', 'dog', 'player'):
                 name = folder + '_' + name
             f.write('    SND_%s = %d,\n' % (cname(name), i))
-        f.write('    SND_NUM\n};\n\n#endif\n')
+        f.write('    SND_NUM\n};\n\nenum {\n')
+        for i, c in enumerate(MOVER_IDS):
+            f.write('    MV_%s = %d,\n' % (cname(c.replace('func_', '')), i))
+        f.write('    MV_NUM\n};\n\nenum {\n')
+        for i, c in enumerate(TRIGGER_IDS):
+            f.write('    TR_%s = %d,\n' % (cname(c.replace('trigger_', '')), i))
+        f.write('    TR_NUM\n};\n\n#endif\n')
 
 
 # ---------------------------------------------------------------- entities
@@ -340,7 +357,85 @@ def load_wav(d):
     return bytes(data)
 
 
-def add_game_data(blob, pak, pal, ents, models, fx, E, mkmap, anorms):
+def add_movers(blob, ents, models, movers, E):
+    """doors, plats, buttons, their keyframes, triggers, names and messages"""
+    import movers as mv
+    trigs = mv.build_triggers(ents, models, movers)
+    names, msgs = {}, ['']
+
+    def name(n):
+        if not n:
+            return 0
+        if n not in names:
+            names[n] = len(names) + 1
+        assert names[n] < 256
+        return names[n]
+
+    def msg(t):
+        if not t:
+            return 0
+        t = t.replace('\n', ' ').strip()
+        if t not in msgs:
+            msgs.append(t)
+        return msgs.index(t)
+
+    def i16(v):
+        v = int(round(v))
+        assert -32768 <= v < 32768, v
+        return v
+
+    def wait10(w):
+        return -1 if w < 0 else i16(w * 10)
+
+    out = {}
+    keys = bytearray()
+    recs = bytearray()
+    nkeys = 0
+    for m in movers:
+        startpos = 0
+        if m['cls'] == 'func_plat' and not m['targetname']:
+            startpos = 1
+        pos = list(m['pos']) + [(0, 0, 0)] * (3 - len(m['pos']))
+        # qbsp stores model bounds 1 unit inside the brush; SV_LinkEdict
+        # adds the unit back, which gives the brush's own bounds
+        mins = [i16(m['mins'][k] - 1) for k in range(3)]
+        maxs = [i16(m['maxs'][k] + 1) for k in range(3)]
+        recs += struct.pack(E + 'BBBBBBBBHHhhhhhh3h3h9hH',
+                            MOVER_IDS.index(m['cls']), m['sounds'], name(m['targetname']),
+                            name(m['target']), msg(m['message']), m['group'], len(m['keys']), startpos,
+                            m['flags'] & 0xFFFF, nkeys, i16(m['speed']), wait10(m['wait']), i16(m['dmg']),
+                            i16(m['health']), m['hull1'], m['hull2'], *mins, *maxs,
+                            *[i16(c) for p in pos for c in p], 0)
+        for k in m['keys']:
+            keys += struct.pack(E + '3h', *[i16(c) for c in k])
+            nkeys += 1
+    out['movers'] = (blob.add(bytes(recs)), len(movers))
+    out['mkeys'] = (blob.add(bytes(keys)), nkeys)
+    recs = bytearray()
+    for t in trigs:
+        facing = -1000
+        if t['facing']:
+            facing = i16(math.degrees(math.atan2(t['facing'][1], t['facing'][0])))
+        dest = t.get('dest', (0, 0, 0))
+        recs += struct.pack(E + 'BBBBBBHhhhh3h3hh3hhH',
+                            TRIGGER_IDS.index(t['cls']), t['sounds'], name(t['targetname']),
+                            name(t['target']), name(t['killtarget']), msg(t['message']),
+                            t['flags'] & 0xFFFF, wait10(t['wait']), i16(t['health']), i16(t['count']),
+                            t['owner'], *[i16(c - 1) for c in t['mins']], *[i16(c + 1) for c in t['maxs']],
+                            facing, *[i16(c) for c in dest], i16(t.get('dest_yaw', 0)), 0)
+    out['triggers'] = (blob.add(bytes(recs)), len(trigs))
+    # messages: a table of offsets (from the blob start), then the text
+    table = bytearray(4 * len(msgs))
+    base = blob.add(bytes(table))
+    offs = [blob.add(t.encode('latin1') + b'\0') for t in msgs]
+    blob.data[base:base + 4 * len(msgs)] = b''.join(struct.pack(E + 'I', o) for o in offs)
+    out['strings'] = (base, len(msgs))
+    print('movers: %d (%d keyframes), triggers: %d, names: %d, messages: %d' % (
+        len(movers), nkeys, len(trigs), len(names), len(msgs) - 1))
+    return out
+
+
+def add_game_data(blob, pak, pal, ents, models, fx, E, mkmap, anorms, movers=()):
     """append entities, models and sounds; returns {lump: (offset, count)}"""
     out = {}
     eb, n = entities(ents, models, fx, E)
@@ -374,6 +469,7 @@ def add_game_data(blob, pak, pal, ents, models, fx, E, mkmap, anorms):
         ent += struct.pack(E + 'II', o, len(s))
     blob.data[base:base + len(ent)] = ent
     out['sounds'] = (base, len(sounds))
+    out.update(add_movers(blob, ents, models, list(movers), E))
     print('game data: %d entities, models %d KB, sounds %d KB' % (
         n, sum(len(b) for b in blobs) // 1024, sum(len(s) for s in sounds) // 1024))
     return out

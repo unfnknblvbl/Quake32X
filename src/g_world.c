@@ -47,9 +47,47 @@ static int contents_from(int hull, int num, const fixed_t p[3])
     return leaf_contents(hull, num);
 }
 
+/* the hull sizes: a point, the player (and grunt), the big monsters */
+static const int8_t hull_lo[3][3] = { { 0, 0, 0 }, { -16, -16, -24 }, { -32, -32, -24 } };
+static const int8_t hull_hi[3][3] = { { 0, 0, 0 }, { 16, 16, 32 }, { 32, 32, 64 } };
+
+/* is p (an origin for that hull) inside mover m? Hull 0 is its box; the
+   others use the mover's own clip hulls */
+int g_mover_solid(int m, int hull, const fixed_t p[3])
+{
+    const lmover_t *l = &lmovers[m];
+    fixed_t q[3];
+    int k;
+    for (k = 0; k < 3; k++) {
+        q[k] = p[k] - mover_off[m][k];
+        if (q[k] < FX(l->mins[k] - hull_hi[hull][k]) || q[k] > FX(l->maxs[k] - hull_lo[hull][k]))
+            return 0;
+    }
+    if (hull == 0)
+        return 1;
+    return contents_from(hull, hull == 1 ? l->hull1 : l->hull2, q) == CONTENTS_SOLID;
+}
+
+int g_point_solid(int hull, const fixed_t p[3])
+{
+    int m;
+    if (contents_from(hull, hull_head(hull), p) == CONTENTS_SOLID)
+        return 1;
+    for (m = 0; m < nmovers; m++)
+        if (g_mover_solid(m, hull, p))
+            return 1;
+    return 0;
+}
+
 int g_contents(int hull, const fixed_t p[3])
 {
-    return contents_from(hull, hull_head(hull), p);
+    int c = contents_from(hull, hull_head(hull), p), m;
+    if (c == CONTENTS_SOLID)
+        return c;
+    for (m = 0; m < nmovers; m++)
+        if (g_mover_solid(m, hull, p))
+            return CONTENTS_SOLID;
+    return c;
 }
 
 static void plane_normal(int hull, int num, fixed_t out[3])
@@ -133,17 +171,95 @@ static int rhc(int hull, int num, fixed_t p1f, fixed_t p2f, const fixed_t p1[3],
     return 0;
 }
 
+/* the segment against a box (hull 0 against a mover): 1 and the fraction
+   and normal of the entry if it enters before frac */
+static int seg_box(const fixed_t s[3], const fixed_t e[3], const fixed_t mn[3], const fixed_t mx[3],
+                   fixed_t *frac, fixed_t n[3])
+{
+    fixed_t t0 = 0, t1 = 0x10000;
+    int k, axis = -1, neg = 0;
+    for (k = 0; k < 3; k++) {
+        fixed_t d = e[k] - s[k];
+        if (d > -64 && d < 64) {
+            if (s[k] < mn[k] || s[k] > mx[k])
+                return 0;
+        } else {
+            fixed_t a = hw_fixdiv(mn[k] - s[k], d), b = hw_fixdiv(mx[k] - s[k], d);
+            int ng = d > 0;          /* entering through the min face */
+            if (a > b) { fixed_t t = a; a = b; b = t; ng = !ng; }
+            if (a > t0) { t0 = a; axis = k; neg = ng; }
+            if (b < t1) t1 = b;
+            if (t0 > t1)
+                return 0;
+        }
+    }
+    if (axis < 0 || t0 >= *frac)
+        return 0;
+    *frac = t0;
+    n[0] = n[1] = n[2] = 0;
+    n[axis] = neg ? -0x10000 : 0x10000;
+    return 1;
+}
+
 void g_trace(int hull, const fixed_t start[3], const fixed_t end[3], trace_t *tr)
 {
+    int m, k;
     memset(tr, 0, sizeof(*tr));
     tr->frac = 0x10000;
     tr->allsolid = 1;
+    tr->mover = -1;
     tr->end[0] = end[0]; tr->end[1] = end[1]; tr->end[2] = end[2];
     rhc(hull, hull_head(hull), 0, 0x10000, start, end, tr);
     if (tr->allsolid)
         tr->startsolid = 1;
+    /* SV_ClipToLinks: the movers, each in its own hull */
+    for (m = 0; m < nmovers; m++) {
+        const lmover_t *l = &lmovers[m];
+        fixed_t mn[3], mx[3];
+        for (k = 0; k < 3; k++) {
+            mn[k] = FX(l->mins[k] - hull_hi[hull][k]) + mover_off[m][k];
+            mx[k] = FX(l->maxs[k] - hull_lo[hull][k]) + mover_off[m][k];
+            if ((start[k] < mn[k] && end[k] < mn[k]) || (start[k] > mx[k] && end[k] > mx[k]))
+                break;
+        }
+        if (k < 3)
+            continue;
+        if (hull == 0) {
+            fixed_t f = tr->frac, n[3];
+            if (seg_box(start, end, mn, mx, &f, n)) {
+                tr->frac = f;
+                tr->normal[0] = n[0]; tr->normal[1] = n[1]; tr->normal[2] = n[2];
+                tr->mover = m;
+            }
+        } else {
+            trace_t mt;
+            fixed_t s2[3], e2[3];
+            memset(&mt, 0, sizeof(mt));
+            mt.frac = 0x10000;
+            mt.allsolid = 1;
+            for (k = 0; k < 3; k++) {
+                s2[k] = start[k] - mover_off[m][k];
+                e2[k] = end[k] - mover_off[m][k];
+            }
+            rhc(hull, hull == 1 ? l->hull1 : l->hull2, 0, 0x10000, s2, e2, &mt);
+            if (mt.allsolid)
+                mt.startsolid = 1;
+            if (mt.startsolid)
+                tr->startsolid = 1;
+            if (mt.allsolid)
+                tr->allsolid = 1;
+            if (mt.frac < tr->frac) {
+                tr->frac = mt.frac;
+                tr->normal[0] = mt.normal[0]; tr->normal[1] = mt.normal[1]; tr->normal[2] = mt.normal[2];
+                tr->mover = m;
+            }
+        }
+    }
     if (tr->frac == 0x10000) {
         tr->end[0] = end[0]; tr->end[1] = end[1]; tr->end[2] = end[2];
+    } else if (tr->mover >= 0) {
+        for (k = 0; k < 3; k++)
+            tr->end[k] = start[k] + fixmul(end[k] - start[k], tr->frac);
     }
 }
 

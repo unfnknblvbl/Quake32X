@@ -2,7 +2,18 @@
 #include "g_local.h"
 
 player_t player;
-settings_t cfg = { 1, 1, 6, 1, 0, 0, 0, 2, 0 };
+settings_t cfg = { 1, 1, 6, 1, 0, 0, 0, 2, 0, { BTN_C, BTN_B, BTN_A, 0 }, 0 };
+
+/* pad buttons -> the game's action bits, as set on the Controls page */
+uint16_t map_pad(uint16_t raw)
+{
+    uint16_t out = raw & (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT | BTN_START);
+    if (raw & cfg.bind[BIND_FIRE]) out |= ACT_FIRE;
+    if (raw & cfg.bind[BIND_JUMP]) out |= ACT_JUMP;
+    if (raw & cfg.bind[BIND_STRAFE]) out |= ACT_STRAFE;
+    if (cfg.bind[BIND_WEAPON] && (raw & cfg.bind[BIND_WEAPON])) out |= ACT_WEAPON;
+    return out;
+}
 
 const int far_levels[NUM_FAR] = { 256, 384, 512, 768, 1024, 1536, 2048, 3072, 8192 };
 /* screen sizes, like Quake's viewsize: the same view, smaller (10:7 window) */
@@ -21,23 +32,12 @@ const viewsize_t view_sizes[NUM_SIZES] = {
 #define STEPSIZE  (18 << 16)
 #define VIEWHEIGHT (22 << 16)
 
-static int hull_contents(const fixed_t p[3])
-{
-    int num = lvl.hdr->headnode1;
-    while (num >= 0) {
-        const lclipnode_t *c = &lvl.clipnodes[num];
-        const lplane_t *pl = &lvl.planes[c->plane];
-        fixed_t d = dot16(pl->n, p) - pl->dist;
-        num = c->child[d < 0];
-    }
-    return num;
-}
-
+/* the player's clip hull: the world and the doors, plats and buttons */
 static int is_solid(fixed_t x, fixed_t y, fixed_t z)
 {
     fixed_t p[3];
     p[0] = x; p[1] = y; p[2] = z;
-    return hull_contents(p) == CONTENTS_SOLID;
+    return g_point_solid(1, p);
 }
 
 void game_init(void)
@@ -87,12 +87,30 @@ static int try_move(fixed_t dx, fixed_t dy)
     return 1;
 }
 
+/* blocked: creep up to the obstacle in halving steps, so the player ends
+   up flush against walls and buttons (like Quake's clip to the impact) */
+static void creep(fixed_t dx, fixed_t dy)
+{
+    int k;
+    for (k = 0; k < 4; k++) {
+        dx /= 2;
+        dy /= 2;
+        if (!is_solid(player.pos[0] + dx, player.pos[1] + dy, player.pos[2])) {
+            player.pos[0] += dx;
+            player.pos[1] += dy;
+        }
+    }
+}
+
 static void move_horiz(fixed_t dx, fixed_t dy)
 {
     if (!dx && !dy)
         return;
     if (try_move(dx, dy))
         return;
+    /* up to the obstacle, then slide along it */
+    if (cfg.fly || !g_box_blocked(player.pos[0] + dx, player.pos[1] + dy, player.pos[2]))
+        creep(dx, dy);
     if (dx && try_move(dx, 0))
         return;
     if (dy)
@@ -124,12 +142,13 @@ void game_tick(int buttons)
     fixed_t speed = cfg.fly ? FLYSPEED : RUNSPEED;
     fixed_t fwd = 0, side = 0;
 
-    if (buttons & BTN_A) {
-        /* A held: left/right strafe, up/down look */
+    if (buttons & ACT_STRAFE) {
+        /* strafe held: left/right strafe, up/down look */
+        int look = cfg.invert ? -LOOKSPEED : LOOKSPEED;
         if (buttons & BTN_LEFT)  side -= speed;
         if (buttons & BTN_RIGHT) side += speed;
-        if (buttons & BTN_UP)    player.pitch -= LOOKSPEED;
-        if (buttons & BTN_DOWN)  player.pitch += LOOKSPEED;
+        if (buttons & BTN_UP)    player.pitch -= look;
+        if (buttons & BTN_DOWN)  player.pitch += look;
         if (player.pitch < -ANGLE_90 * 7 / 9) player.pitch = -ANGLE_90 * 7 / 9;
         if (player.pitch >  ANGLE_90 * 7 / 9) player.pitch =  ANGLE_90 * 7 / 9;
     } else {
@@ -144,13 +163,13 @@ void game_tick(int buttons)
 
     if (cfg.fly) {
         fixed_t dz = 0;
-        if (buttons & BTN_B) dz += speed;
-        if (buttons & BTN_C) dz -= speed;
+        if (buttons & ACT_JUMP) dz += speed;
+        if (buttons & ACT_FIRE) dz -= speed;
         if (dz) move_vert(dz);
         player.vz = 0;
         return;
     }
-    if (player.onground && (buttons & BTN_B)) {
+    if (player.onground && (buttons & ACT_JUMP)) {
         player.vz = JUMPV;
         player.onground = 0;
     }
