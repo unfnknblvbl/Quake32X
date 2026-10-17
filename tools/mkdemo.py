@@ -87,11 +87,13 @@ def convert(data, ents, models, movers, E='>'):
     started = False
     last_time = 0.0
     pending_rec = bytearray()
+    seen_view = False
     for f in frames:
         msgs = f['msgs']
         rec = bytearray()
         time = None
         nents = 0
+        has_view = False
         for m in msgs:
             k = m[0]
             if k == 'serverinfo':
@@ -125,6 +127,7 @@ def convert(data, ents, models, movers, E='>'):
                 mm = mdl_map.get(model)
                 if num == view_ent:
                     rec += struct.pack(E + 'B3h', 3, *[i16(c) for c in org])
+                    has_view = True
                 elif isinstance(mm, tuple) and mm[0] == 'mover':
                     rec += struct.pack(E + 'BB3h', 2, mm[1], *[i16(c) for c in org])
                 elif isinstance(mm, int):
@@ -201,11 +204,13 @@ def convert(data, ents, models, movers, E='>'):
                 rec += struct.pack(E + 'BBH', 11, 4, 0)        # one more kill
             elif k == 'foundsecret':
                 rec += struct.pack(E + 'BBH', 11, 5, 0)
-        if time is None:
+        if time is None or not (seen_view or has_view):
             # a block with no time of its own (reliable messages: kills,
-            # prints): its records go with the next frame
+            # prints), or one from before the view has a place (sign-on,
+            # when Quake draws nothing): its records go with the next frame
             pending_rec += rec
             continue
+        seen_view = True
         rec = pending_rec + rec
         pending_rec = bytearray()
         started = True
