@@ -3,6 +3,8 @@
  *   sh2sim rom.32x syms.txt seconds [options]
  *     -pad FROM TO BUTTONS     hold buttons (UDLRABCS) between vblank FROM and TO
  *     -shot VBL file.ppm        dump the displayed frame at vblank VBL
+ *     -video file               raw RGB24 320x224 of the displayed frame at every vblank
+ *     -vlog file                one line per vblank: vbl COMM0 fps10
  *     -prof                     print per-function cycle profile
  *
  * Models: SH-2 issue timing (1 cycle/op, branches, multiplier latency, load-use
@@ -762,20 +764,29 @@ static uint16_t parse_buttons(const char *s)
     return b;
 }
 
-static void save_shot(const char *file)
+static void write_frame(FILE *f)
 {
-    FILE *f = fopen(file, "wb");
+    static uint8_t buf[320 * 224 * 3];
     const uint8_t *fb = fbmem[fb_visible()];
+    uint8_t *o = buf;
     int x, y;
-    if (!f) return;
-    fprintf(f, "P6\n320 224\n255\n");
     for (y = 0; y < 224; y++) {
         uint32_t lo = rd_be(&fb[y * 2], 2) * 2;
         for (x = 0; x < 320; x++) {
             uint16_t p = cram[fb[(lo + x) & 0x1FFFF]];
-            fputc((p & 31) << 3, f); fputc(((p >> 5) & 31) << 3, f); fputc(((p >> 10) & 31) << 3, f);
+            int r = p & 31, g = (p >> 5) & 31, b = (p >> 10) & 31;
+            *o++ = (r << 3) | (r >> 2); *o++ = (g << 3) | (g >> 2); *o++ = (b << 3) | (b >> 2);
         }
     }
+    fwrite(buf, 1, sizeof(buf), f);
+}
+
+static void save_shot(const char *file)
+{
+    FILE *f = fopen(file, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n320 224\n255\n");
+    write_frame(f);
     fclose(f);
 }
 
@@ -784,6 +795,7 @@ int main(int argc, char **argv)
     FILE *f;
     double seconds;
     int i, doprof = 0, hotn = 0, hotcat = 0;
+    FILE *video = NULL, *vlog = NULL;
     uint32_t src, dst, size;
     uint64_t end, next_vbl;
     char line[256];
@@ -815,6 +827,8 @@ int main(int argc, char **argv)
             shots[nshots].vbl = atoi(argv[i + 1]); shots[nshots].file = argv[i + 2]; nshots++; i += 2;
         } else if (!strcmp(argv[i], "-prof")) doprof = 1;
         else if (!strcmp(argv[i], "-noirq")) noirq = 1;
+        else if (!strcmp(argv[i], "-video") && i + 1 < argc) video = fopen(argv[++i], "wb");
+        else if (!strcmp(argv[i], "-vlog") && i + 1 < argc) vlog = fopen(argv[++i], "w");
         else if (!strcmp(argv[i], "-hot") && i + 1 < argc) { doprof = 1; hotn = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "-hotcat") && i + 1 < argc) { hotcat = atoi(argv[++i]); }
     }
@@ -856,6 +870,8 @@ int main(int argc, char **argv)
             }
             for (i = 0; i < nshots; i++)
                 if (shots[i].vbl == (int)now_vbl) save_shot(shots[i].file);
+            if (video) write_frame(video);
+            if (vlog) fprintf(vlog, "%llu %u %u\n", (unsigned long long)now_vbl, comm[0], comm[1]);
             now_vbl++;
             pad_now = 0;
             for (i = 0; i < npads; i++)
@@ -870,6 +886,8 @@ int main(int argc, char **argv)
         step(c);
     }
 
+    if (video) fclose(video);
+    if (vlog) fclose(vlog);
     printf("simulated %.2f s, %llu vblanks, fps10 (COMM2) = %u\n", seconds, (unsigned long long)now_vbl, comm[1]);
     if (nframes_r)
         printf("frames %llu: avg render master %.2f ms, slave %.2f ms; avg frame %.2f ms\n", (unsigned long long)nframes_r,

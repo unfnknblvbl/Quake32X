@@ -39,6 +39,18 @@ ASDEFS  = --defsym ONCHIP=1
 CFLAGS += -DONCHIP
 endif
 
+# DEMO=1: scripted walkthrough (camera route + menu macros) instead of the pad
+ifeq ($(DEMO),1)
+CFLAGS += -DDEMO
+OBJS   += build/demo_data.o
+endif
+
+build/demo_data.c: tools/make_demo.py data/$(MAP)_route.json | build
+	python3 tools/make_demo.py data/$(MAP)_route.json $@
+
+build/demo_data.o: build/demo_data.c src/demo.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 build/crt0.o: src/crt0.s build/m68k.bin build/level.lvl
 	$(AS) --big $(ASDEFS) -o $@ $<
 

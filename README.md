@@ -145,13 +145,31 @@ that don't implement the SH-2 cache-as-RAM mode.
 
 E1M1 is part of the Quake shareware episode, so the ROM can be shared.
 
+## Walkthrough demo
+
+```
+make DEMO=1     # plays a scripted walkthrough instead of reading the pad
+```
+
+The demo build follows a camera route through the level and toggles the
+pause-menu settings by itself, the same way a player would. The route comes
+from `tools/plan_route.py`, a path planner that walks the player clip hull.
+`tools/make_demo.py` then turns that route into a 60 Hz camera table plus
+timed menu button presses. The route is stored in `data/e1m1_route.json`.
+
+To record it, run `sh2sim ... -video frames.rgb -vlog frames.log`. This
+writes every displayed frame as raw 320x224 RGB24, and logs the demo phase
+and FPS for each vblank, which is useful for captions.
+
 ## Tools
 
 * `tools/mkmap.py`: BSP to level blob converter (`--le` writes a
   little-endian copy for the host build).
 * `tools/sh2sim.c`: the dual SH-2 and 32X bus timing model, with
   per-function profiles (`-prof`), hottest instructions (`-hot N`), scripted
-  pad input and screenshots.
+  pad input, screenshots and video capture (`-video`).
+* `tools/plan_route.py` and `tools/make_demo.py`: the route planner and the
+  demo script generator.
 * `tools/harness.c`: a headless libretro front end for PicoDrive, used for
   screenshots and scripted input.
 * `host/`: the same renderer built for a PC, with sanitizers and per-frame

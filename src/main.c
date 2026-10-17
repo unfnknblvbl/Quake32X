@@ -24,7 +24,11 @@ static rcpu_t rcpu[2];
 static surfcache_t *schash[2][HASHSIZE];
 static volatile int32_t slave_spin;
 static uint16_t pad_poll;           /* pad samples taken by the master while rendering */
+#ifdef DEMO
+static int hint_time = 0;
+#else
 static int hint_time = 8 * 60;      /* show the controls for the first 8 seconds */
+#endif
 
 /* 60 Hz time from whichever vblank counter is running: the 68000's (COMM14)
    or the master SH-2's interrupt. Either one alone keeps the game going. */
@@ -102,6 +106,46 @@ static void apply_settings(void)
 /* input, game ticks, view and PVS for the next frame */
 static uint32_t frame_now;
 
+#ifdef DEMO
+#include "demo.h"
+/* demo playback: the camera follows a planned route, and pause-menu macros
+   fire at given camera ticks (the camera holds still while a macro runs) */
+static int demo_tick, demo_macro, demo_step;
+static uint32_t demo_t0;
+
+static uint16_t demo_update(uint32_t now, int ticks)
+{
+    const demo_macro_t *m = &demo_macros[demo_macro];
+    uint16_t pressed = 0;
+    if (m->tick >= 0 && demo_tick >= m->tick) {
+        if (!demo_t0) demo_t0 = now ? now : 1;
+        while (m->steps[demo_step].dt >= 0 && (int)(now - demo_t0) >= m->steps[demo_step].dt)
+            pressed |= m->steps[demo_step++].buttons;
+        if (m->steps[demo_step].dt < 0) {
+            demo_macro++;
+            demo_step = 0;
+            demo_t0 = 0;
+        }
+    } else if (!menu_active) {
+        demo_tick += ticks;
+        if (m->tick >= 0 && demo_tick > m->tick) demo_tick = m->tick;
+        if (demo_tick >= demo_ncam) demo_tick = demo_ncam - 1;
+    }
+    {
+        const demo_cam_t *c = &demo_cam[demo_tick];
+        const demo_phase_t *ph = demo_phases;
+        player.pos[0] = c->x;
+        player.pos[1] = c->y;
+        player.pos[2] = c->z;
+        player.yaw = c->yaw;
+        player.pitch = c->pitch;
+        while (ph[1].tick >= 0 && ph[1].tick <= demo_tick) ph++;
+        MARS_SYS_COMM0 = ph->phase | (menu_active ? 0x80 : 0);
+    }
+    return pressed;
+}
+#endif
+
 static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
 {
     uint32_t now = time_now();
@@ -120,6 +164,9 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
     *oldpad = pad;
     *last_tick = now;
     frame_now = now;
+#ifdef DEMO
+    pressed = demo_update(now, ticks);     /* real time: the camera keeps pace */
+#endif
     if (ticks > 6) ticks = 6;
     if (hint_time > 0) {
         hint_time -= ticks;
@@ -132,9 +179,11 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
     }
     if (menu_active)
         menu_input(pressed);
+#ifndef DEMO
     else
         while (ticks-- > 0)
             game_tick(pad);
+#endif
     apply_settings();
 
     game_eye(eye);
