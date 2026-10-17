@@ -13,9 +13,10 @@ static uint8_t *arena_base;         /* per-CPU memory: liquid buffers + surface 
 static int arena_each, arena_mesh = -1;
 static int win_x, win_y;            /* view window origin (32X pixels and rows) */
 volatile uint8_t dbg_phase;         /* demo phase, for the simulator's log */
+volatile int32_t dbg_fps10;         /* frames a second x 10, for the logs and harnesses */
 
 /* the view weapon of the frame being drawn (the 68000 shows it at the flip) */
-static struct { int weapon, frame, light; } gun;
+static struct { int weapon, frame; } gun;
 
 #define SLAVE_GO     MARS_SYS_COMM4
 #define SLAVE_DONE   MARS_SYS_COMM6
@@ -56,10 +57,58 @@ static uint32_t time_now(void)
     return t;
 }
 
+/* the XE-1 AP's axes, 7 bits each (centre 64), as the 68000 cycles them
+   through COMM2: left X, Y, right X, Y, the throttle; and the extension */
+static uint8_t an_axis[5] = { 64, 64, 64, 64, 64 };
+static int an_ext;
+int pad_kind;
+
+static void an_sample(void)
+{
+    uint16_t w = MARS_SYS_COMM2;
+    switch (w >> 14) {
+    case 0: an_axis[0] = (w >> 7) & 127; an_axis[1] = w & 127; break;
+    case 1: an_axis[2] = (w >> 7) & 127; an_axis[3] = w & 127; break;
+    case 2: an_axis[4] = (w >> 7) & 127; an_ext = (w >> 6) & 1; break;
+    }
+}
+
+/* an axis past the dead zone, -1 .. 1 (16.16); squared for turning and
+   looking, so small movements are fine */
+static fixed_t an_value(int v, int curve)
+{
+    static const uint8_t dead[NUM_AN_DEAD] = { 2, 5, 8, 12 };
+    int d = dead[cfg.an_dead], s = v - 64, a = s < 0 ? -s : s;
+    fixed_t f;
+    if (a <= d)
+        return 0;
+    f = hw_div((a - d) << 16, 63 - d);
+    if (f > 0x10000) f = 0x10000;
+    if (curve) f = fixmul(f, f);
+    return s < 0 ? -f : f;
+}
+
+static void an_update(void)
+{
+    fixed_t lx = an_value(an_axis[0], cfg.an_left), ly = an_value(an_axis[1], 0);
+    fixed_t rx = an_value(an_axis[2], 1), ry;
+    if (an_ext)
+        ry = an_value(an_axis[3], 1);
+    else if (cfg.an_throttle)
+        ry = -an_value(an_axis[4], 1);      /* the throttle as the right stick's Y: up = 255 */
+    else
+        ry = 0;
+    an_in.fwd = -ly;
+    an_in.side = cfg.an_left ? 0 : lx;
+    an_in.turn = rx + (cfg.an_left ? lx : 0);
+    an_in.look = cfg.an_right ? 0 : (cfg.an_invert ? -ry : ry);
+}
+
 /* called by the master between batches while it renders */
 static void poll_pad(void)
 {
     pad_poll |= PAD;
+    an_sample();
     md_pump();
 }
 
@@ -193,15 +242,20 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
     int ticks = now - *last_tick;
     volatile uint16_t *latch = UNCACHED(&pad_latch);
     uint16_t pad = PAD, seen, pressed;
+    int analog;
 
     seen = *latch | pad_poll;
     *latch = 0;
     pad_poll = 0;
-    /* 0xF000 = no pad; bit 12 alone marks a 6-button pad */
+    an_sample();
+    /* 0xF000 = no pad; bit 12 alone marks a 6-button pad; bit 13 the XE-1
+       AP, with its triggers in bits 14 and 15 */
     if ((pad & BTN_NOPAD) == BTN_NOPAD) pad = 0;
     if ((seen & BTN_NOPAD) == BTN_NOPAD) seen = 0;
-    pad &= 0x0FFF;
-    seen &= 0x0FFF;
+    analog = (pad & AN_PAD) != 0;
+    pad_kind = analog ? 2 + an_ext : pad ? 1 : 0;
+    pad &= analog ? 0xCFFF : 0x0FFF;
+    seen &= analog ? 0xCFFF : 0x0FFF;
     pressed = (seen | pad) & ~*oldpad;
     *oldpad = pad;
     *last_tick = now;
@@ -222,9 +276,13 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
     if (menu_active) {
         menu_input(pressed);                /* the menu reads the pad itself */
     } else {
-        /* the player's buttons as actions (Controls page), or the bot's */
-        uint16_t held = map_pad(pad);
-        pressed = map_pad(pressed);
+        /* the player's buttons as actions (Controls page, or the analogue
+           pad's page), or the bot's */
+        uint16_t held = analog ? map_analog(pad) : map_pad(pad);
+        pressed = analog ? map_analog(pressed) : map_pad(pressed);
+        an_in.active = analog && !bot_active;
+        if (an_in.active)
+            an_update();
         while (ticks-- > 0) {
             if (bot_active)
                 bot_tick(&held, &pressed);
@@ -259,10 +317,8 @@ static void update_view(int *viewleaf)
 
     /* the view weapon: the Mega Drive draws it, the 32X skips what it hides */
     if (!ps.dead && !cfg.fly && !g_level_done) {
-        int j = view.lighting ? 255 - g_light_point(player.pos) : 160;
         gun.weapon = ps.weapon == IT_SUPER_SHOTGUN;
         gun.frame = ps.weaponframe;
-        gun.light = j < 24 ? 24 : j;
     } else
         gun.frame = -1;
     {
@@ -373,14 +429,14 @@ void pri_main(void)
             frames = 0;
             fps_tick = now;
         }
-        MARS_SYS_COMM2 = fps10;
+        dbg_fps10 = fps10;
 
         /* request the flip; it happens at the next vertical blank while the
            game logic and the next frame's geometry run */
         fs = MARS_VDP_FBCTL & MARS_VDP_FS;
         MARS_VDP_FBCTL = fs ^ 1;
         view.flip_fs = fs ^ 1;
-        md_gun(gun.weapon, cfg.size, gun.frame, gun.light);    /* with the flip */
+        md_gun(gun.weapon, cfg.size, gun.frame);    /* with the flip */
         md_pump();
         update_view(&viewleaf);
     }

@@ -40,7 +40,7 @@ void md_end_back(void);
 
 /* the view weapon (weapon 0 shotgun, 1 super shotgun; frame -1 = none),
  * shown from the next vertical blank */
-void md_gun(int weapon, int size, int frame, int light);
+void md_gun(int weapon, int size, int frame);
 /* what the weapon frame hides in the 32X view; 0 if nothing */
 int  md_gun_cut(int weapon, int size, int frame, md_cut_t *cut);
 

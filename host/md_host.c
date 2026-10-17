@@ -5,6 +5,7 @@
 #include "../src/mdlink.h"
 
 volatile uint8_t dbg_phase;        /* main.c's, for the logs */
+int pad_kind;                       /* main.c's: the host has an ordinary pad */
 static uint8_t cur[2][MD_ROWS][MD_COLS], next[MD_ROWS][MD_COLS];
 static uint32_t back_key = 0xFFFFFFFF;
 
@@ -50,7 +51,7 @@ void md_back(int col, int row, int v)
 }
 
 void md_end_back(void) {}
-void md_gun(int weapon, int size, int frame, int light) { (void)weapon; (void)size; (void)frame; (void)light; }
+void md_gun(int weapon, int size, int frame) { (void)weapon; (void)size; (void)frame; }
 int md_gun_cut(int weapon, int size, int frame, md_cut_t *cut) { (void)weapon; (void)size; (void)frame; (void)cut; return 0; }
 
 static void put(uint8_t *rgb, int x, int y, int c)

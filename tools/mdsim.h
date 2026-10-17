@@ -26,6 +26,67 @@ static uint16_t md_adapter = 0x0083;
 static int pad_th = 1, pad_count;
 static uint16_t md_pad;             /* SH-2 button bits, as sh2sim's -pad */
 static uint64_t md_clk;             /* 68000 clocks run */
+
+/* -xe1ap: port 1 holds an XE-1 AP analogue pad (with 32X-HD's extension
+ * unless -xe1ap-noext), as described in 32X-HD's ANALOGUE-PAD document:
+ * a falling edge of TH latches a report, sent 50 us later one nibble per
+ * 20 us (10 us /ACK high with the new L/H, then 10 us /ACK low with the
+ * nibble), 12 nibbles, or 20 when TH is still low after the twelfth. The
+ * d-pad letters of -pad push the left stick all the way. */
+static int xe_on, xe_ext = 1;
+static uint8_t xe_axes[7] = { 128, 128, 128, 128, 128, 0, 0 };   /* X Y RZ Z RY LT RT */
+static uint8_t xe_nib[20];
+static int xe_active, xe_short;
+static uint64_t xe_t0;
+
+static uint64_t md_now(void) { return md_clk + m68k_cycles_run(); }
+
+static void xe_latch(void)
+{
+    uint16_t p = md_pad;
+    int x = xe_axes[0], y = xe_axes[1], z = xe_axes[3], rz = xe_axes[2], ry = xe_axes[4];
+    int lt = xe_axes[5], rt = xe_axes[6];
+    if (p & 4) x = 0;
+    if (p & 8) x = 255;
+    if (p & 1) y = 0;
+    if (p & 2) y = 255;
+    if (!xe_ext)
+        z = 128 + (rt - lt) / 2;
+    /* buttons 0 = pressed: E1 E2 START SELECT / A B C D */
+    xe_nib[0] = (p & 0x200 ? 0 : 8) | (p & 0x100 ? 0 : 4) | (p & 0x80 ? 0 : 2) | (p & 0x800 ? 0 : 1);
+    xe_nib[1] = (p & 0x40 ? 0 : 8) | (p & 0x10 ? 0 : 4) | (p & 0x20 ? 0 : 2) | (p & 0x400 ? 0 : 1);
+    xe_nib[2] = x >> 4;  xe_nib[6] = x & 15;
+    xe_nib[3] = y >> 4;  xe_nib[7] = y & 15;
+    xe_nib[4] = rz >> 4; xe_nib[8] = rz & 15;
+    xe_nib[5] = z >> 4;  xe_nib[9] = z & 15;
+    xe_nib[10] = 15;
+    xe_nib[11] = (p & 0x40 ? 0 : 8) | (p & 0x10 ? 0 : 4) | 3;
+    xe_nib[12] = 3; xe_nib[13] = 2;
+    xe_nib[14] = ry >> 4; xe_nib[15] = ry & 15;
+    xe_nib[16] = lt >> 4; xe_nib[17] = lt & 15;
+    xe_nib[18] = rt >> 4; xe_nib[19] = rt & 15;
+    xe_t0 = md_now();
+    xe_active = 1;
+    xe_short = !xe_ext;
+}
+
+/* the lines now: D0-D3, TL = L/H, TR = /ACK */
+static uint8_t xe_read(void)
+{
+    uint64_t us10 = (md_now() - xe_t0) * 1000 / 767;  /* tenths of a microsecond */
+    int k, n = xe_short ? 12 : 20, lo;
+    if (!xe_active || us10 < 500)
+        return 0x2F;
+    k = (int)((us10 - 500) / 200);
+    lo = (us10 - 500) % 200 >= 100;
+    if (k >= n) {
+        xe_active = 0;
+        return 0x2F;
+    }
+    if (!lo)
+        return (k ? xe_nib[k - 1] : 15) | ((k & 1) << 4) | 0x20;
+    return xe_nib[k] | ((k & 1) << 4);
+}
 static int md_on;
 static uint8_t md_ctx[16384] __attribute__((aligned(16)));
 
@@ -39,6 +100,8 @@ static uint32_t md_vector(uint32_t a)
 static uint8_t io_read(uint32_t a)
 {
     if (a == 0xA10001) return 0xA0;
+    if (a == 0xA10003 && xe_on)
+        return xe_read() | (pad_th << 6);
     if (a == 0xA10003) {
         uint16_t p = md_pad;
         int v;
@@ -64,8 +127,14 @@ static void io_write(uint32_t a, uint8_t v)
 {
     if (a == 0xA10003) {
         int th = (v >> 6) & 1;
-        if (pad_th && !th)
+        if (pad_th && !th) {
             pad_count++;
+            if (xe_on)
+                xe_latch();
+        }
+        /* REQ raised before the twelfth nibble: no extension this time */
+        if (xe_on && !pad_th && th && xe_active && md_now() - xe_t0 < (uint64_t)(50 + 12 * 20) * 767 / 100)
+            xe_short = 1;
         pad_th = th;
     }
 }

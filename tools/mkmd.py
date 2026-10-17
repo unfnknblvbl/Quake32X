@@ -9,9 +9,10 @@ needs from pak0.pak:
   - fixed tiles: blank, black, a dither for shading, Quake's console font
     (conchars) and the border pattern (backtile), plain and shaded
   - the view weapons pre-rendered at every screen size as Mega Drive
-    sprites: textured, Gouraud-lit and anti-aliased at the full 320-pixel
-    width, in one 15-colour palette per weapon, with palettes for 16 light
-    levels (the 68000 swaps them as the light changes)
+    sprites: textured, Gouraud-lit (at one fixed, bright light) and
+    anti-aliased at the full 320-pixel width; each set (a weapon at a
+    screen size) has two 15-colour palettes, and each sprite (a block of up
+    to 4x4 tiles) uses whichever suits it
   - for each weapon frame, the rows of the 32X view it covers completely
     (in 32X pixels, two screen pixels by two lines): the 32X skips those
 
@@ -21,7 +22,7 @@ Everything is big-endian, read by the 68000 and the SH-2s from cartridge
 ROM. Layout (offsets from the start of the file):
 
   header   'MDQ1', static tile ofs, static tile count, static palette ofs,
-           set count, set table ofs, size count, weapon count, level count
+           set count, set table ofs, size count, weapon count
   static   tiles 0..STATIC_TILES-1 (32 bytes each, 4 bits per pixel)
   palettes line 0 (font) and line 1 (border), 16 words each
   sets     one per (weapon, screen size), 32 bytes each:
@@ -30,7 +31,7 @@ ROM. Layout (offsets from the start of the file):
   frame    u16 sprite count, then per sprite four words, ready for the
            sprite table: y + 128, size << 8, tile word, x + 128
   cutout   u8 first row, u8 row count, then (x0, x1) per row (x1 = 0: none)
-  palette  NLEVELS x 16 words (palette line 2)
+  palette  32 words: palette lines 2 and 3
 """
 import math
 import os
@@ -48,7 +49,6 @@ from anorms import ANORMS          # noqa: E402
 SIZES = [(160, 104), (144, 96), (128, 80), (112, 72), (96, 64), (80, 56)]
 VIEW_ROWS = 104                    # 32X rows above the status bar
 WEAPONS = ['progs/v_shot.mdl', 'progs/v_shot2.mdl']
-NLEVELS = 16
 
 FONT_TILE = 16
 BORDER_TILE = FONT_TILE + 256
@@ -56,11 +56,12 @@ SHADE_TILE = BORDER_TILE + 64
 STATIC_TILES = SHADE_TILE + 64     # 400
 GUN_TILE = STATIC_TILES
 GUN_TILES_MAX = 1536 - GUN_TILE    # VRAM 0x0000-0xBFFF holds tiles
-GUN_PAL = 2                        # palette line for the weapon
+GUN_PAL = 2                        # palette lines for the weapon: 2 and 3
 
 SS = 3                             # supersampling for the weapon renders
-REF_LIGHT = 128
-GAMMA = 0.8                        # a little lift: 3 bits per channel lose dark detail                    # the light the weapon is rendered at
+REF_LIGHT = 128                    # the light the weapon is rendered at (Quake's brightest)
+BRIGHT = 230                       # where the weapon's brightest parts end up
+GAMMA = 0.8                        # a little lift: 3 bits per channel lose dark detail
 
 
 def md_level(v):
@@ -319,101 +320,19 @@ def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
     return out, alpha
 
 
-def light_scale(j):
-    """average brightness of the weapon at light j, as setup_light works it out"""
-    j = max(j, 24)
-    amb = min(j, 128)
-    shade = j if amb + j <= 192 else 192 - amb
-    return amb + 0.5 * shade
-
-
-def level_light(k):
-    """the light (0..255) at the middle of level k, as src/mdlink.c picks levels"""
-    return 24 + 15 * k + 7
-
-
-def build_sets(pak, pal, colormap, preview=None):
-    sets = []
-    for wi, path in enumerate(WEAPONS):
-        m = load_mdl(pak[path])
-        nframes = len(m['frames'])
-        renders = {}
-        for si, (vw, vh) in enumerate(SIZES):
-            for f in range(nframes):
-                renders[si, f] = render_gun(m, f, vw, vh, pal, colormap)
-        # one palette for the weapon: weighted by area
-        pts, wts = [], []
-        for (si, f), (rgb, al) in renders.items():
-            msk = al >= 0.5
-            pts.append(rgb[msk])
-            wts.append(np.full(msk.sum(), 1.0 / (1 + si)))
-        pts = np.vstack(pts)
-        wts = np.concatenate(wts)
-        q = np.round(pts / 4).astype(int)
-        keys, inv = np.unique(q, axis=0, return_inverse=True)
-        inv = inv.reshape(-1)
-        kw = np.bincount(inv, weights=wts)
-        kp = np.zeros((len(keys), 3))
-        for c in range(3):
-            kp[:, c] = np.bincount(inv, weights=pts[:, c] * wts) / kw
-        cent = kmeans(kp, kw, 15, snapped=True)
-        ref = light_scale(REF_LIGHT)
-        pals = []
-        for k in range(NLEVELS):
-            s = light_scale(level_light(k)) / ref
-            pals.append([0] + [cram(tuple(min(255.0, c * s) for c in cc)) for cc in cent])
-        for si, (vw, vh) in enumerate(SIZES):
-            frames = []
-            for f in range(nframes):
-                rgb, al = renders[si, f]
-                shown = np.array([snap(c) for c in cent])
-                d = (((rgb[:, :, None, :] - shown[None, None, :, :]) ** 2) * WEIGHT).sum(3)
-                idx = d.argmin(2) + 1
-                idx[al < 0.5] = 0
-                frames.append(idx)
-            sets.append(dict(weapon=wi, size=si, vw=vw, vh=vh, frames=frames, pals=pals, cent=cent))
-            if preview is not None:
-                save_preview(preview, '%s_s%d' % (os.path.basename(path)[:-4], si), frames, pals)
-    return sets
-
-
-def cram_rgb(w):
-    return tuple(((w >> s) & 7) * 255 // 7 for s in (1, 5, 9))
-
-
-def save_preview(d, name, frames, pals):
-    """frames side by side, cropped to the weapon, at four light levels"""
-    from PIL import Image
-    ys, xs = np.nonzero(sum(f > 0 for f in frames))
-    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
-    w, h = x1 - x0, y1 - y0
-    levels = (2, 6, 10, 14)
-    im = Image.new('RGB', (w * len(frames), h * len(levels)), (40, 90, 40))
-    for li, k in enumerate(levels):
-        rgbs = [cram_rgb(c) for c in pals[k]]
-        for f, idx in enumerate(frames):
-            for y in range(h):
-                for x in range(w):
-                    v = idx[y0 + y, x0 + x]
-                    if v:
-                        im.putpixel((f * w + x, li * h + y), rgbs[v])
-    im.resize((im.width * 3, im.height * 3), Image.NEAREST).save(os.path.join(d, name + '.png'))
-
-
-def sprites_for(idx, vw, vh, tile_base):
-    """split one frame into sprites; returns (sprite words, tile bytes)"""
-    ys, xs = np.nonzero(idx)
+def frame_blocks(mask):
+    """a frame's sprite blocks: up to 4x4 tiles each on a grid from the
+    weapon's top left corner, trimmed to the tiles in use: (y, x, rows, cols)"""
+    ys, xs = np.nonzero(mask)
     if len(xs) == 0:
-        return [], b''
-    ox = 160 - vw                       # view window in screen pixels / lines
-    oy = VIEW_ROWS - vh
+        return []
     bx0, by0 = xs.min(), ys.min()
-    bx1, by1 = xs.max() + 1, ys.max() + 1
-    tw = (bx1 - bx0 + 7) // 8
-    th = (by1 - by0 + 7) // 8
-    grid = np.zeros((th * 8, tw * 8), int)
-    grid[:by1 - by0, :bx1 - bx0] = idx[by0:by1, bx0:bx1]
-    words, tiles = [], bytearray()
+    tw = (xs.max() + 1 - bx0 + 7) // 8
+    th = (ys.max() + 1 - by0 + 7) // 8
+    grid = np.zeros((th * 8, tw * 8), bool)
+    sub = mask[by0:by0 + th * 8, bx0:bx0 + tw * 8]
+    grid[:sub.shape[0], :sub.shape[1]] = sub
+    blocks = []
     for byk in range(0, th, 4):
         for bxk in range(0, tw, 4):
             used = [(r, c) for r in range(byk, min(th, byk + 4)) for c in range(bxk, min(tw, bxk + 4))
@@ -422,12 +341,137 @@ def sprites_for(idx, vw, vh, tile_base):
                 continue
             r0, r1 = min(r for r, _ in used), max(r for r, _ in used) + 1
             c0, c1 = min(c for _, c in used), max(c for _, c in used) + 1
-            first = tile_base + len(tiles) // 32
-            for c in range(c0, c1):            # sprite tiles go down the columns
-                for r in range(r0, r1):
-                    tiles += tile_bytes(grid[r * 8:r * 8 + 8, c * 8:c * 8 + 8])
-            size = ((c1 - c0 - 1) << 2) | (r1 - r0 - 1)
-            words += [oy + by0 + r0 * 8 + 128, size << 8, (GUN_PAL << 13) | first, ox + bx0 + c0 * 8 + 128]
+            blocks.append((by0 + r0 * 8, bx0 + c0 * 8, r1 - r0, c1 - c0))
+    return blocks
+
+
+GRID = np.array([[r, g, b] for r in range(8) for g in range(8) for b in range(8)], float) * 255 // 7
+
+
+def palette_for(pts, w):
+    """15 different Mega Drive colours for these pixels: k-means on the 3-bit
+    grid, then (where centres landed on the same grid colour) the grid
+    colours that cut the error most"""
+    q = np.round(pts / 4).astype(int)
+    keys, inv = np.unique(q, axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    kw = np.bincount(inv, weights=w)
+    kp = np.zeros((len(keys), 3))
+    for c in range(3):
+        kp[:, c] = np.bincount(inv, weights=pts[:, c] * w) / kw
+    cent = kmeans(kp, kw, 15, snapped=True)
+    shown = np.unique(np.array([snap(c) for c in cent]), axis=0)
+    dg = (((kp[:, None, :] - GRID[None, :, :]) ** 2) * WEIGHT).sum(2)     # point x grid
+    while len(shown) < 15:
+        best = (((kp[:, None, :] - shown[None, :, :]) ** 2) * WEIGHT).sum(2).min(1)
+        gain = (np.maximum(best[:, None] - dg, 0) * kw[:, None]).sum(0)
+        k = int(gain.argmax())
+        if gain[k] <= 0:
+            break
+        shown = np.vstack([shown, GRID[k]])
+    while len(shown) < 15:
+        shown = np.vstack([shown, shown[0]])
+    return shown
+
+
+def nearest(pts, shown):
+    d = (((pts[:, None, :] - shown[None, :, :]) ** 2) * WEIGHT).sum(2)
+    return d.argmin(1), d.min(1)
+
+
+def build_sets(pak, pal, colormap, preview=None):
+    """every weapon at every screen size: the frames as colour indices, each
+    sprite block on one of two 15-colour palettes made for that set"""
+    sets = []
+    scale = None
+    for wi, path in enumerate(WEAPONS):
+        m = load_mdl(pak[path])
+        nframes = len(m['frames'])
+        for si, (vw, vh) in enumerate(SIZES):
+            renders = [render_gun(m, f, vw, vh, pal, colormap) for f in range(nframes)]
+            if scale is None:
+                # one fixed, bright look: the shotgun's brightest parts (98th
+                # percentile of its full-size idle frame) at BRIGHT; the same
+                # scale for every size and for the super shotgun
+                lit = renders[0][0][renders[0][1] >= 0.5]
+                scale = BRIGHT / max(1.0, np.percentile(lit.max(1), 98))
+                print('weapon colour scale %.2f' % scale)
+            renders = [(np.clip(r[0] * scale, 0, 255), r[1]) for r in renders]
+            blocks = []                 # (frame, y, x, rows, cols, opaque pixels)
+            for f, (rgb, al) in enumerate(renders):
+                mask = al >= 0.5
+                for (y, x, th, tw) in frame_blocks(mask):
+                    sub = rgb[y:y + th * 8, x:x + tw * 8][mask[y:y + th * 8, x:x + tw * 8]]
+                    blocks.append([f, y, x, th, tw, sub])
+            # two palettes: split the blocks by brightness, then let each
+            # block take the palette that fits it better, a few times over
+            lum = np.array([(b[5] * WEIGHT).sum(1).mean() if len(b[5]) else 0 for b in blocks])
+            group = (lum > np.median(lum)).astype(int)
+            for _ in range(4):
+                pals = []
+                for g in (0, 1):
+                    pts = [b[5] for b, k in zip(blocks, group) if k == g and len(b[5])]
+                    if not pts:
+                        pts = [b[5] for b in blocks if len(b[5])]
+                    pts = np.vstack(pts)
+                    pals.append(palette_for(pts, np.ones(len(pts))))
+                group = np.array([int(np.argmin([nearest(b[5], pals[g])[1].sum() for g in (0, 1)]))
+                                  if len(b[5]) else 0 for b in blocks])
+            frames = [np.zeros(r[1].shape, int) for r in renders]
+            lines = [[] for _ in renders]
+            for b, g in zip(blocks, group):
+                f, y, x, th, tw, _ = b
+                rgb, al = renders[f]
+                reg = rgb[y:y + th * 8, x:x + tw * 8]
+                msk = al[y:y + th * 8, x:x + tw * 8] >= 0.5
+                idx, _ = nearest(reg.reshape(-1, 3), pals[g])
+                idx = (idx + 1).reshape(msk.shape) * msk
+                frames[f][y:y + idx.shape[0], x:x + idx.shape[1]] = idx
+                lines[f].append((y, x, th, tw, g))
+            words = [0] + [cram(c) for c in pals[0]] + [0] + [cram(c) for c in pals[1]]
+            sets.append(dict(weapon=wi, size=si, vw=vw, vh=vh, frames=frames, blocks=lines, pal=words))
+            if preview is not None:
+                save_preview(preview, '%s_s%d' % (os.path.basename(path)[:-4], si), frames, lines, words)
+    return sets
+
+
+def cram_rgb(w):
+    return tuple(((w >> s) & 7) * 255 // 7 for s in (1, 5, 9))
+
+
+def save_preview(d, name, frames, lines, words):
+    """the frames side by side, cropped to the weapon"""
+    from PIL import Image
+    ys, xs = np.nonzero(sum(f > 0 for f in frames))
+    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+    w, h = x1 - x0, y1 - y0
+    im = Image.new('RGB', (w * len(frames), h), (40, 90, 40))
+    rgbs = [cram_rgb(c) for c in words]
+    for f, idx in enumerate(frames):
+        for (by, bx, th, tw, g) in lines[f]:
+            for y in range(by, min(by + th * 8, idx.shape[0])):
+                for x in range(bx, min(bx + tw * 8, idx.shape[1])):
+                    v = idx[y, x]
+                    if v and y0 <= y < y1 and x0 <= x < x1:
+                        im.putpixel((f * w + x - x0, y - y0), rgbs[16 * g + v])
+    im.resize((im.width * 3, im.height * 3), Image.NEAREST).save(os.path.join(d, name + '.png'))
+
+
+def sprites_for(idx, blocks, vw, vh, tile_base):
+    """one frame's sprites (from frame_blocks, with their palette); returns
+    (sprite words, tile bytes)"""
+    ox = 160 - vw                       # view window in screen pixels / lines
+    oy = VIEW_ROWS - vh
+    pad = np.zeros((idx.shape[0] + 32, idx.shape[1] + 32), int)
+    pad[:idx.shape[0], :idx.shape[1]] = idx
+    words, tiles = [], bytearray()
+    for (y, x, th, tw, g) in blocks:
+        first = tile_base + len(tiles) // 32
+        for c in range(tw):                 # sprite tiles go down the columns
+            for r in range(th):
+                tiles += tile_bytes(pad[y + r * 8:y + r * 8 + 8, x + c * 8:x + c * 8 + 8])
+        size = ((tw - 1) << 2) | (th - 1)
+        words += [oy + y + 128, size << 8, ((GUN_PAL + g) << 13) | first, ox + x + 128]
     return words, bytes(tiles)
 
 
@@ -486,8 +530,8 @@ def main():
     total, worst = 0, 0
     for s in sets:
         ftab, ctab, alltiles = [], [], bytearray()
-        for idx in s['frames']:
-            words, t = sprites_for(idx, s['vw'], s['vh'], GUN_TILE + len(alltiles) // 32)
+        for idx, blocks in zip(s['frames'], s['blocks']):
+            words, t = sprites_for(idx, blocks, s['vw'], s['vh'], GUN_TILE + len(alltiles) // 32)
             alltiles += t
             ftab.append(b.add(struct.pack('>H%dH' % len(words), len(words) // 4, *words)))
             row0, rows = cutout(idx, s['vw'], s['vh'])
@@ -499,11 +543,11 @@ def main():
         to = b.add(bytes(alltiles), 4)
         fo = b.add(struct.pack('>%dI' % len(ftab), *ftab), 4)
         co = b.add(struct.pack('>%dI' % len(ctab), *ctab), 4)
-        po = b.add(struct.pack('>%dH' % (16 * NLEVELS), *[w for p in s['pals'] for w in p]), 4)
+        po = b.add(struct.pack('>32H', *s['pal']), 4)
         table.append(struct.pack('>IHHIIIIII', to, ntiles, len(s['frames']), fo, po, co, 0, 0, 0))
     hdr['sets'] = b.add(b''.join(table), 4)
-    b.data[0:36] = struct.pack('>4sIIIIIIII', b'MDQ1', hdr['tiles'], STATIC_TILES, hdr['pal'],
-                               len(sets), hdr['sets'], len(SIZES), len(WEAPONS), NLEVELS)
+    b.data[0:32] = struct.pack('>4sIIIIIII', b'MDQ1', hdr['tiles'], STATIC_TILES, hdr['pal'],
+                               len(sets), hdr['sets'], len(SIZES), len(WEAPONS))
     open(out, 'wb').write(bytes(b.data))
     print('md data: %d bytes, %d weapon sets, weapon tiles %d KB (largest set %d tiles)' % (
         len(b.data), len(sets), total // 1024, worst))

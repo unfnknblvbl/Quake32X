@@ -175,9 +175,9 @@ static const uint8_t *set_entry(int set)
     return md_data + rd32(md_data + 20) + set * 32;
 }
 
-void md_gun(int weapon, int size, int frame, int light)
+void md_gun(int weapon, int size, int frame)
 {
-    int set = weapon * (int)rd32(md_data + 24) + size, level, w;
+    int set = weapon * (int)rd32(md_data + 24) + size, w;
     if (frame < 0) {
         w = 0xA0FF;
     } else {
@@ -186,10 +186,7 @@ void md_gun(int weapon, int size, int frame, int light)
             gun_set = set;
             gun_word = -1;
         }
-        level = (light - 24) / 15;
-        if (level < 0) level = 0;
-        if (level > 15) level = 15;
-        w = 0xA000 | (level << 8) | frame;
+        w = 0xA000 | frame;
     }
     if (w != gun_word) {
         put_word(w);

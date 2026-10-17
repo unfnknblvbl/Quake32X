@@ -36,6 +36,16 @@ combination, and looking up and down can be inverted. The controls, with the
 buttons as set, are shown at the bottom of the screen for the first few
 seconds.
 
+**Analogue pad (XE-1 AP).** If port 1 holds Dempa / Micomsoft's XE-1 AP, or
+the 32X-HD emulator's version of it made from a PlayStation or Xbox pad, the
+game uses its sticks. They have their own page in the pause menu
+(**Analogue pad...**), separate from the regular controls. By default the
+left stick moves and strafes, the right stick turns and looks, the right
+trigger fires, the left trigger jumps and C changes weapon; the stick also
+works the menus. 32X-HD's extension of the protocol adds the right stick's
+up and down and the two triggers separately. Without it, the XE-1 AP's
+throttle gives the triggers (or, if set, looking up and down).
+
 Input and timing don't depend on any single interrupt. The game clock follows
 whichever vblank counter is running, either the 68000's or the master SH-2's,
 and the master also samples the pad between render batches.
@@ -66,6 +76,12 @@ scene keeps rendering behind the menu, so every change shows up immediately.
 * **Show FPS**: the frame rate.
 * **Movement**: walk (gravity, steps, collision with the player hull) or fly.
 * **Controls...**: the page described above; Defaults puts the buttons back.
+* **Analogue pad...**: what each stick does (left: move + strafe or move +
+  turn; right: turn + look or just turn), turn speed (90 to 360 degrees a
+  second at full stick) and look speed (60 to 240), look up/down inverted,
+  the dead zone, what the throttle does without the extension, and which
+  trigger or button fires, jumps and changes weapon. The bottom line shows
+  what is in port 1.
 * **Demo (bot plays)**: the bot restarts the level and plays it to the exit
   (below). Turning it off hands the controls back where it is.
 * **Resume**
@@ -245,17 +261,25 @@ The Mega Drive layer (`src-md/md.s`, `src/mdlink.c`, `tools/mkmd.py`):
   bar, and a dither that darkens the screen behind the menu. The view sizes
   are on the Mega Drive's 8-pixel grid, so the border is made of whole tiles.
 * **The view weapon** is a set of sprites. `tools/mkmd.py` renders the
-  shotgun and super shotgun frames at every screen size, textured, with
-  Quake's model lighting, at full 320-pixel resolution and anti-aliased, in
-  one 15-colour palette per weapon. The 68000 copies the current weapon's
-  frames into VRAM when the weapon or screen size changes (up to 320 tiles),
-  places the sprites each frame, and lights the weapon by switching between
-  16 precomputed palettes.
+  shotgun and super shotgun frames at every screen size, textured and lit
+  the way Quake lights models, at full 320-pixel resolution and
+  anti-aliased. The weapon has one fixed, bright look (it does not darken
+  with the room). Each set (a weapon at a screen size) has two 15-colour
+  palettes, and each sprite (up to 4x4 tiles) uses whichever suits it. The
+  68000 copies the current set's frames into VRAM when the weapon or screen
+  size changes (up to 320 tiles) and places the sprites each frame.
 * **The cutout.** For every weapon frame, `mkmd.py` also stores the 32X
   pixels the sprite covers completely, row by row. The renderer starts each
   frame with those marked as covered in its coverage lists, so nothing
   behind the weapon is ever drawn. The weapon model itself is no longer
   drawn by the SH-2s at all.
+* **The pad.** The 68000 reads an ordinary pad in each vertical blank and,
+  when none answers, tries the XE-1 AP: it pulls REQ low and stores the 12
+  nibbles of the report (20 with the extension) as they come, 10 us each,
+  and checks their L/H order afterwards, since checking between nibbles is
+  too slow to catch the next one. The buttons go to COMM12 as usual (bit 13
+  marks the analogue pad, bits 14 and 15 are its triggers); the axes take
+  turns in COMM2, three words of two 7-bit values each.
 * **The link.** The SH-2s cannot reach the Mega Drive VDP, so the master
   queues 16-bit words for the 68000: tiles for text cells (only the cells
   that changed since the last frame), the weapon's frame and light, and
@@ -362,6 +386,9 @@ movers.
   side: the ROM's 68000 program (on the Musashi 68000 core, taken from a
   PicoDrive source tree, `MUSASHI=...`), the joypad port and the VDP's
   planes and sprites, mixed over the 32X picture as the 32X does it.
+  `-xe1ap` (or `-xe1ap-noext`) puts an XE-1 AP in port 1, following
+  32X-HD's description of its timing, and `-analog FROM TO lx ly rx ry lt
+  rt` sets its sticks and triggers between two vblanks.
 * `tools/mkmd.py`: the Mega Drive tiles, palettes, pre-rendered weapon
   sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x4000).
 * `tools/movers.py`: doors, platforms, buttons and triggers worked out from
@@ -381,8 +408,6 @@ movers.
 
 ## Not done yet / ideas
 
-* The XE-1 AP analogue pad (and its extension for modern pads' second stick
-  and triggers), with its own settings.
 * Firing the nailgun, and the other weapons; textured monster skins; damage
   from slime, lava and falls; E1M2 and the change of level.
 * Simpler grunt and dog models (about half the triangles) would make fights

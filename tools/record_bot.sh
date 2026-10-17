@@ -11,7 +11,7 @@
 set -e
 cd "$(dirname "$0")/.."
 OUT=$1; SECS=${2:-150}
-KEYS=${3:-SRDDRDDLLDDDDDR}
+KEYS=${3:-SRDDRDDLLDDDDDDR}
 mkdir -p "$OUT"
 make -s >/dev/null
 /opt/toolchains/sega/bin/sh-elf-nm -n build/q32x.elf > build/syms.txt

@@ -2,7 +2,24 @@
 #include "g_local.h"
 
 player_t player;
-settings_t cfg = { 1, 1, 6, 1, 0, 0, 0, 2, 0, { BTN_C, BTN_B, BTN_A, 0 }, 0 };
+settings_t cfg = { 1, 1, 6, 1, 0, 0, 0, 2, 0, { BTN_C, BTN_B, BTN_A, 0 }, 0,
+                   0, 0, 3, 3, 0, 1, 0, { AN_RT, AN_LT, BTN_C } };
+analog_t an_in;
+
+/* the analogue pad's buttons -> actions, as set on its own page (its stick
+   moves the player, so the d-pad bits it also sets are for the menus) */
+uint16_t map_analog(uint16_t raw)
+{
+    uint16_t out = raw & BTN_START;
+    if (raw & cfg.an_bind[BIND_FIRE]) out |= ACT_FIRE;
+    if (raw & cfg.an_bind[BIND_JUMP]) out |= ACT_JUMP;
+    if (raw & cfg.an_bind[2]) out |= ACT_WEAPON;
+    return out;
+}
+
+/* degrees a second at full stick, per speed step */
+static const uint16_t an_turn_dps[NUM_AN_SPEEDS] = { 90, 120, 150, 180, 210, 240, 300, 360 };
+static const uint16_t an_look_dps[NUM_AN_SPEEDS] = { 60, 80, 100, 120, 150, 180, 210, 240 };
 
 /* pad buttons -> the game's action bits, as set on the Controls page */
 uint16_t map_pad(uint16_t raw)
@@ -158,6 +175,20 @@ void game_tick(int buttons)
         if (buttons & BTN_UP)    fwd += speed;
         if (buttons & BTN_DOWN)  fwd -= speed;
         player.yaw &= 0xFFFF;
+    }
+    if (an_in.active && !ps.dead) {
+        /* the analogue pad: as far as the sticks are pushed */
+        fwd += fixmul(speed, an_in.fwd);
+        side += fixmul(speed, an_in.side);
+        player.yaw -= fixmul(an_turn_dps[cfg.an_turn] * 65536 / 360 / 60, an_in.turn);
+        player.yaw &= 0xFFFF;
+        player.pitch += fixmul(an_look_dps[cfg.an_look] * 65536 / 360 / 60, an_in.look);
+        if (player.pitch < -ANGLE_90 * 7 / 9) player.pitch = -ANGLE_90 * 7 / 9;
+        if (player.pitch >  ANGLE_90 * 7 / 9) player.pitch =  ANGLE_90 * 7 / 9;
+        if (fwd > speed) fwd = speed;
+        if (fwd < -speed) fwd = -speed;
+        if (side > speed) side = speed;
+        if (side < -speed) side = -speed;
     }
     /* right vector is (sin, -cos) */
     move_horiz(fixmul(fwd, cy) + fixmul(side, sy), fixmul(fwd, sy) - fixmul(side, cy));

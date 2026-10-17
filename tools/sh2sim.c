@@ -93,8 +93,11 @@ static int watch_n[4], nwatch;
 static uint16_t pad_now;
 static int noirq;           /* test: SH-2 VBlank interrupts never arrive */
 static uint32_t phase_addr;  /* _dbg_phase: the demo phase for -vlog */
+static uint32_t fps_addr;    /* _dbg_fps10: frames a second x 10 */
 #ifdef MD68K
 #include "mdsim.h"
+static struct { int from, to, v[6]; } analog[64];
+static int nanalog;
 #endif
 /* render timing: GO = COMM4 write by master, slave done = COMM6 write, master done = its first COMM6 poll */
 static uint64_t t_go, sum_master, sum_slave, nframes_r, t_sdone, sum_serial, t_flipreq, sum_flipwait, nflip, sum_upd, sum_hud;
@@ -896,6 +899,12 @@ struct shot { int vbl; const char *file; };
 static struct shot shots[64];
 static int nshots;
 
+/* the game's frame rate x 10: _dbg_fps10, or COMM2 in older ROMs */
+static unsigned fps10(void)
+{
+    return fps_addr ? rd_be(&sdram[fps_addr & 0x3FFFF], 4) : comm[1];
+}
+
 static uint16_t parse_buttons(const char *s)
 {
     uint16_t b = 0;
@@ -971,6 +980,7 @@ int main(int argc, char **argv)
     while (f && fgets(line, sizeof(line), f)) {
         unsigned a; char t, name[128];
         if (sscanf(line, "%x %c %127s", &a, &t, name) == 3 && !strcmp(name, "_dbg_phase")) phase_addr = a;
+        if (sscanf(line, "%x %c %127s", &a, &t, name) == 3 && !strcmp(name, "_dbg_fps10")) fps_addr = a;
     }
     if (f) fclose(f);
     seconds = atof(argv[3]);
@@ -984,6 +994,15 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-noirq")) noirq = 1;
 #ifdef MD68K
         else if (!strcmp(argv[i], "-nomd")) md_on = -1;
+        else if (!strcmp(argv[i], "-xe1ap")) xe_on = 1;
+        else if (!strcmp(argv[i], "-xe1ap-noext")) { xe_on = 1; xe_ext = 0; }
+        else if (!strcmp(argv[i], "-analog") && i + 9 < argc && nanalog < 64) {
+            /* -analog FROM TO lx ly rx ry lt rt (0..255; 128 = centre) */
+            int k;
+            analog[nanalog].from = atoi(argv[i + 1]); analog[nanalog].to = atoi(argv[i + 2]);
+            for (k = 0; k < 6; k++) analog[nanalog].v[k] = atoi(argv[i + 3 + k]);
+            nanalog++; i += 8;
+        }
 #endif
         else if (!strcmp(argv[i], "-video") && i + 1 < argc) video = fopen(argv[++i], "wb");
         else if (!strcmp(argv[i], "-vlog") && i + 1 < argc) vlog = fopen(argv[++i], "w");
@@ -1062,7 +1081,7 @@ int main(int argc, char **argv)
             if (vlog) {
                 int w, k;
                 fprintf(vlog, "%llu %u %u", (unsigned long long)now_vbl,
-                        phase_addr ? sdram[phase_addr & 0x3FFFF] : comm[0], comm[1]);
+                        phase_addr ? sdram[phase_addr & 0x3FFFF] : comm[0], fps10());
                 for (w = 0; w < nwatch; w++)
                     for (k = 0; k < watch_n[w]; k++)
                         fprintf(vlog, " %d", (int32_t)rd_be(&sdram[(watch_addr[w] & 0x3FFFF) + 4 * k], 4));
@@ -1073,6 +1092,15 @@ int main(int argc, char **argv)
             for (i = 0; i < npads; i++)
                 if ((int)now_vbl >= pads[i].from && (int)now_vbl <= pads[i].to) pad_now |= pads[i].b;
 #ifdef MD68K
+            if (xe_on) {
+                static const int map[6] = { 0, 1, 2, 4, 5, 6 };   /* lx ly rx ry lt rt -> X Y RZ RY LT RT */
+                int k, a;
+                for (k = 0; k < 6; k++) xe_axes[map[k]] = k < 4 ? 128 : 0;
+                for (a = 0; a < nanalog; a++)
+                    if ((int)now_vbl >= analog[a].from && (int)now_vbl <= analog[a].to)
+                        for (k = 0; k < 6; k++) xe_axes[map[k]] = analog[a].v[k];
+                xe_axes[3] = 128;
+            }
             if (md_on)
                 md_vblank_start(pad_now);
             else
@@ -1081,7 +1109,7 @@ int main(int argc, char **argv)
                 comm[6] = pad_now;
                 comm[7]++;
             }
-            if (now_vbl % 60 == 0) printf("t=%3llus fps %u.%u\n", (unsigned long long)now_vbl / 60, comm[1] / 10, comm[1] % 10);
+            if (now_vbl % 60 == 0) printf("t=%3llus fps %u.%u\n", (unsigned long long)now_vbl / 60, fps10() / 10, fps10() % 10);
             if (!noirq) cpu[0].vint_pending = cpu[1].vint_pending = 1;
             next_vbl += FRAME_CYCLES;
         }
@@ -1097,7 +1125,7 @@ int main(int argc, char **argv)
                (unsigned long long)audio_frames, pwm_cycle > 1 ? (double)SH2_HZ / (pwm_cycle - 1) : 0.0, pwm_cycle,
                (unsigned long long)cpu[0].dma_words, (unsigned long long)cpu[1].dma_words);
     }
-    printf("simulated %.2f s, %llu vblanks, fps10 (COMM2) = %u\n", seconds, (unsigned long long)now_vbl, comm[1]);
+    printf("simulated %.2f s, %llu vblanks, fps10 = %u\n", seconds, (unsigned long long)now_vbl, fps10());
     if (nframes_r)
         printf("frames %llu: avg render master %.2f ms, slave %.2f ms; avg frame %.2f ms\n", (unsigned long long)nframes_r,
                sum_master * 1000.0 / SH2_HZ / nframes_r, sum_slave * 1000.0 / SH2_HZ / nframes_r,

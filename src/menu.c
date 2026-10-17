@@ -8,8 +8,8 @@
 int menu_active;
 static int cursor;
 
-enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_MONSTERS, M_FPS, M_MOVE, M_CONTROLS, M_DEMO,
-       M_RESUME, M_NUM };
+enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_MONSTERS, M_FPS, M_MOVE, M_CONTROLS, M_ANALOG,
+       M_DEMO, M_RESUME, M_NUM };
 
 static const char *const cap_names[NUM_MONSTER_CAPS] = {
     "OFF", "1", "2", "3", "4", "6", "8", "UNLIMITED"
@@ -82,9 +82,23 @@ const char *button_name(uint16_t b)
 
 /* controls reminder shown at start-up, with the current buttons, on the
  * last two rows of the view (main.c shades them) */
+static const char *an_source_name(uint16_t b);
+
 void hint_draw(int row)
 {
     char buf[48], *p;
+    if (pad_kind >= 2) {
+        /* the analogue pad */
+        md_text(1, row, cfg.an_left ? "L STICK: MOVE/TURN  R STICK: TURN/LOOK" : "L STICK: MOVE  R STICK: TURN/LOOK", 0);
+        p = cat(buf, an_source_name(cfg.an_bind[BIND_FIRE]));
+        p = cat(p, ":FIRE ");
+        p = cat(p, an_source_name(cfg.an_bind[BIND_JUMP]));
+        p = cat(p, ":JUMP ");
+        p = cat(p, an_source_name(cfg.an_bind[2]));
+        cat(p, ":WEAPON");
+        md_text(1, row + 1, buf, 0);
+        return;
+    }
     p = cat(buf, "D-PAD: MOVE/TURN  ");
     p = cat(p, button_name(cfg.bind[BIND_STRAFE]));
     cat(p, "+D-PAD: STRAFE/LOOK");
@@ -106,7 +120,7 @@ void hint_draw(int row)
 
 /* ------------------------------------------------------------ the menu */
 
-static int page;                    /* 0 the pause menu, 1 controls */
+static int page;                    /* 0 the pause menu, 1 controls, 2 the analogue pad */
 
 int menu_page(void) { return page; }
 enum { C_FIRE, C_JUMP, C_STRAFE, C_WEAPON, C_LOOK, C_DEFAULTS, C_BACK, C_NUM };
@@ -145,6 +159,90 @@ static void cycle_bind(int act, int dir)
     cfg.bind[act] = pad_buttons[cur];
 }
 
+/* ------------------------------------------------- the analogue pad page */
+
+enum { A_LEFT, A_RIGHT, A_TURN, A_LOOK, A_INVERT, A_DEAD, A_THROTTLE, A_FIRE, A_JUMP, A_WEAPON,
+       A_DEFAULTS, A_BACK, A_NUM };
+
+/* what the analogue pad's actions can be on: its triggers and buttons */
+static const uint16_t an_sources[8] = { AN_RT, AN_LT, BTN_A, BTN_B, BTN_C, BTN_X, BTN_Y, BTN_Z };
+static const char *const an_source_names[8] = {
+    "R TRIGGER", "L TRIGGER", "A", "B", "C", "D", "E1", "E2"
+};
+
+static const char *an_source_name(uint16_t b)
+{
+    int i;
+    for (i = 0; i < 8; i++)
+        if (an_sources[i] == b)
+            return an_source_names[i];
+    return "?";
+}
+
+/* next source for an action; the action that had it gets this one's old one */
+static void cycle_an_bind(int act, int dir)
+{
+    int i, cur = 0;
+    for (i = 0; i < 8; i++)
+        if (an_sources[i] == cfg.an_bind[act])
+            cur = i;
+    cur = (cur + dir + 8) & 7;
+    for (i = 0; i < 3; i++)
+        if (i != act && cfg.an_bind[i] == an_sources[cur])
+            cfg.an_bind[i] = cfg.an_bind[act];
+    cfg.an_bind[act] = an_sources[cur];
+}
+
+static int step(int v, int delta, int n)
+{
+    if (delta == 2) delta = 1;
+    v += delta;
+    return v < 0 ? 0 : v >= n ? n - 1 : v;
+}
+
+static void analog_input(int delta)
+{
+    switch (cursor) {
+    case A_LEFT:     cfg.an_left ^= 1; break;
+    case A_RIGHT:    cfg.an_right ^= 1; break;
+    case A_TURN:     cfg.an_turn = step(cfg.an_turn, delta, NUM_AN_SPEEDS); break;
+    case A_LOOK:     cfg.an_look = step(cfg.an_look, delta, NUM_AN_SPEEDS); break;
+    case A_INVERT:   cfg.an_invert ^= 1; break;
+    case A_DEAD:     cfg.an_dead = step(cfg.an_dead, delta, NUM_AN_DEAD); break;
+    case A_THROTTLE: cfg.an_throttle ^= 1; break;
+    case A_FIRE: case A_JUMP: case A_WEAPON:
+        cycle_an_bind(cursor - A_FIRE, delta < 0 ? -1 : 1);
+        break;
+    case A_DEFAULTS:
+        if (delta == 2) {
+            cfg.an_left = cfg.an_right = cfg.an_invert = cfg.an_throttle = 0;
+            cfg.an_turn = cfg.an_look = 3;
+            cfg.an_dead = 1;
+            cfg.an_bind[BIND_FIRE] = AN_RT;
+            cfg.an_bind[BIND_JUMP] = AN_LT;
+            cfg.an_bind[2] = BTN_C;
+        }
+        break;
+    case A_BACK:
+        if (delta == 2) {
+            page = 0;
+            cursor = M_ANALOG;
+        }
+        break;
+    }
+}
+
+static char *slider(char *p, int v, int n)
+{
+    int k;
+    *p++ = '[';
+    for (k = 0; k < n - 1; k++)
+        *p++ = k < v ? '=' : '-';
+    *p++ = ']';
+    *p = 0;
+    return p;
+}
+
 static void controls_input(int pressed, int delta)
 {
     static const uint16_t defaults[NUM_BINDS] = { BTN_C, BTN_B, BTN_A, 0 };
@@ -173,7 +271,7 @@ static void controls_input(int pressed, int delta)
 
 void menu_input(int pressed)
 {
-    int delta = 0, n = page ? C_NUM : M_NUM;
+    int delta = 0, n = page == 1 ? C_NUM : page == 2 ? A_NUM : M_NUM;
     if (pressed & BTN_UP)   cursor = cursor ? cursor - 1 : n - 1;
     if (pressed & BTN_DOWN) cursor = cursor == n - 1 ? 0 : cursor + 1;
     if (pressed & BTN_LEFT)  delta = -1;
@@ -181,8 +279,12 @@ void menu_input(int pressed)
     if (pressed & (BTN_A | BTN_B | BTN_C)) delta = 2;
     if (!delta)
         return;
-    if (page) {
+    if (page == 1) {
         controls_input(pressed, delta);
+        return;
+    }
+    if (page == 2) {
+        analog_input(delta);
         return;
     }
     switch (cursor) {
@@ -213,6 +315,12 @@ void menu_input(int pressed)
     case M_CONTROLS:
         if (delta == 2 || delta == 1) {
             page = 1;
+            cursor = 0;
+        }
+        break;
+    case M_ANALOG:
+        if (delta == 2 || delta == 1) {
+            page = 2;
             cursor = 0;
         }
         break;
@@ -268,18 +376,54 @@ static void controls_draw(void)
     md_text(5, 3 + C_NUM * 2 + 3, "X Y Z MODE: 6-button pads.", 0);
 }
 
+static void analog_draw(void)
+{
+    static const char *const names[A_NUM] = {
+        "Left stick", "Right stick", "Turn speed", "Look speed", "Look up/down", "Dead zone",
+        "Throttle", "Fire", "Jump", "Next weapon", "Defaults", "Back"
+    };
+    static const char *const kinds[4] = {
+        "Port 1: no pad", "Port 1: an ordinary pad", "Port 1: XE-1 AP", "Port 1: XE-1 AP + extension"
+    };
+    char buf[32];
+    int i;
+    centre(0, "ANALOGUE PAD", 1);
+    for (i = 0; i < A_NUM; i++) {
+        buf[0] = 0;
+        switch (i) {
+        case A_LEFT:     cat(buf, cfg.an_left ? "MOVE + TURN" : "MOVE + STRAFE"); break;
+        case A_RIGHT:    cat(buf, cfg.an_right ? "TURN" : "TURN + LOOK"); break;
+        case A_TURN:     slider(buf, cfg.an_turn, NUM_AN_SPEEDS + 1); break;
+        case A_LOOK:     slider(buf, cfg.an_look, NUM_AN_SPEEDS + 1); break;
+        case A_INVERT:   cat(buf, cfg.an_invert ? "INVERTED" : "NORMAL"); break;
+        case A_DEAD:     slider(buf, cfg.an_dead, NUM_AN_DEAD + 1); break;
+        case A_THROTTLE: cat(buf, cfg.an_throttle ? "LOOK" : "TRIGGERS"); break;
+        case A_FIRE: case A_JUMP: case A_WEAPON:
+            cat(buf, an_source_name(cfg.an_bind[i - A_FIRE]));
+            break;
+        }
+        item(i, 2 + i * 2, names[i], buf);
+    }
+    centre(MD_ROWS - 2, kinds[pad_kind], 0);
+}
+
 /* the menu covers columns 2-37 of the whole screen (main.c shades them) */
 void menu_draw(void)
 {
     static const char *const names[M_NUM] = {
         "Textures", "Lighting", "Water", "Draw distance", "Screen size",
-        "Monsters at once", "Show FPS", "Movement", "Controls...", "Demo (bot plays)", "Resume"
+        "Monsters at once", "Show FPS", "Movement", "Controls...", "Analogue pad...",
+        "Demo (bot plays)", "Resume"
     };
     char buf[48], *p;
     int i;
 
-    if (page) {
+    if (page == 1) {
         controls_draw();
+        return;
+    }
+    if (page == 2) {
+        analog_draw();
         return;
     }
     centre(0, "PAUSED", 1);
@@ -320,7 +464,7 @@ void menu_draw(void)
         *p = 0;
         item(i, 2 + i * 2, names[i], buf);
     }
-    md_text(5, 2 + M_NUM * 2 + 1, "Up/Down select  Left/Right set", 0);
+    centre(MD_ROWS - 2, "Up/Down select  Left/Right set", 0);
 }
 
 /* end of the level: Quake's intermission figures, in a box at columns
@@ -392,7 +536,7 @@ void overlays_draw(int win_x, int win_y, int fps10, int hint)
     if (menu_active)
         menu_draw();
     if (cfg.showfps)
-        hud_draw(menu_active ? 1 : vx0 + 1, menu_active ? 0 : vy0, fps10);
+        hud_draw(menu_active ? MD_COLS - 9 : vx0 + 1, menu_active ? 0 : vy0, fps10);
     if (hint && !menu_active)
         hint_draw(sbar - 3);
     md_end_text();

@@ -25,7 +25,28 @@ typedef struct {
     uint16_t bind[4];   /* pad buttons for the actions below; next weapon 0 =
                            strafe + fire together */
     int invert;     /* look up/down inverted */
+    /* the XE-1 AP analogue pad, set up on its own page */
+    int an_left;    /* left stick: 0 move + strafe, 1 move + turn */
+    int an_right;   /* right stick: 0 turn + look, 1 turn only */
+    int an_turn, an_look;   /* speed steps, 0 .. NUM_AN_SPEEDS - 1 */
+    int an_invert;  /* look up/down inverted */
+    int an_dead;    /* dead zone step, 0 .. NUM_AN_DEAD - 1 */
+    int an_throttle;    /* without the extension the throttle is: 0 the triggers, 1 look */
+    uint16_t an_bind[3];    /* fire, jump, next weapon: AN_* or pad buttons */
 } settings_t;
+
+#define NUM_AN_SPEEDS 8
+#define NUM_AN_DEAD   4
+/* the analogue pad's triggers, in its pad word (COMM12, src-md/md.s) */
+#define AN_LT       0x4000
+#define AN_RT       0x8000
+#define AN_PAD      0x2000
+
+/* the sticks for this frame's ticks: -1 .. 1 (16.16) */
+typedef struct { int active; fixed_t fwd, side, turn, look; } analog_t;
+extern analog_t an_in;
+extern int pad_kind;        /* port 1: 0 nothing, 1 a pad, 2 an XE-1 AP, 3 with the extension */
+uint16_t map_analog(uint16_t raw);
 
 enum { BIND_FIRE, BIND_JUMP, BIND_STRAFE, BIND_WEAPON, NUM_BINDS };
 
