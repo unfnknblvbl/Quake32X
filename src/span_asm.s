@@ -370,8 +370,9 @@ _span_tex:
 .Lzimin: .long  0x00040000
 .Ldivu:  .long  0xFFFFFF00
 .Lone:   .long  0x00010000
-.Lrecip: .long  0, 65536, 32768, 21845, 16384, 13107, 10923, 9362, 8192
-         .long  7282, 6554, 5958, 5461, 5041, 4681, 4369, 4096
+        /* 65536 / n rounded down: n steps never pass the end point */
+.Lrecip: .long  0, 65536, 32768, 21845, 16384, 13107, 10922, 9362, 8192
+         .long  7281, 6553, 5957, 5461, 5041, 4681, 4369, 4096
 
         .global _oram_code_end
 _oram_code_end:

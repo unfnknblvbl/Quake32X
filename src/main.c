@@ -19,6 +19,7 @@ volatile int32_t dbg_fps10;         /* frames a second x 10, for the logs and ha
 /* the view weapon of the frame being drawn (the 68000 shows it at the flip) */
 static struct { int weapon, frame; } gun;
 static int viewleaf = -1;
+static int md_flush;                /* send all of the next frame's Mega Drive layer */
 int g_mode = GM_PLAY;
 int cur_level = -1;
 
@@ -31,7 +32,7 @@ int cur_level = -1;
 #define FREE_TOP     0x06040000      /* stacks are in on-chip RAM */
 #define CCR_PURGE    0x19            /* purge, keep two-way mode */
 #else
-#define FREE_TOP     0x0603D000      /* slave 4 KB and master 8 KB stacks above */
+#define FREE_TOP     0x0603E000      /* slave 2 KB and master 6 KB stacks above */
 #define CCR_PURGE    0x11            /* purge, 4-way cache */
 #endif
 
@@ -142,7 +143,7 @@ void *memset(void *dst, int c, unsigned n)
     return dst;
 }
 
-static void init_video(void)
+GCODE static void init_video(void)
 {
     int i, k;
     while ((MARS_VDP_FBCTL & MARS_VDP_PEN) == 0) ;
@@ -161,7 +162,47 @@ static void init_video(void)
     }
 }
 
-static void apply_settings(void)
+/* Quake's colour shifts (V_UpdatePalette): the view in a liquid, damage,
+ * pickups and powerups tint the 32X palette, each in turn toward its
+ * colour by its share of 255. The CRAM is rewritten only when it changes */
+uint16_t pal_buf[256] __attribute__((aligned(16)));
+volatile int32_t pal_dirty;         /* the V blank interrupt copies pal_buf to CRAM (crt0.s) */
+
+GCODE static void update_palette(int contents)
+{
+    static uint32_t last_key = 0xFFFFFFFF;
+    struct { uint8_t r, g, b, pct; } sh[4];
+    int n = 0, i, k;
+    uint32_t key;
+    if (contents == CONTENTS_WATER) { sh[n].r = 130; sh[n].g = 80; sh[n].b = 50; sh[n++].pct = 128; }
+    else if (contents == CONTENTS_SLIME) { sh[n].r = 0; sh[n].g = 25; sh[n].b = 5; sh[n++].pct = 150; }
+    else if (contents == CONTENTS_LAVA) { sh[n].r = 255; sh[n].g = 80; sh[n].b = 0; sh[n++].pct = 150; }
+    if (ps.dmg_flash) { sh[n].r = 255; sh[n].g = 0; sh[n].b = 0; sh[n++].pct = ps.dmg_flash; }
+    if (ps.bonus_flash) { sh[n].r = 215; sh[n].g = 186; sh[n].b = 69; sh[n++].pct = ps.bonus_flash; }
+    if (ps.quad_finished > level_time) { sh[n].r = 0; sh[n].g = 0; sh[n].b = 255; sh[n++].pct = 30; }
+    else if (ps.suit_finished > level_time) { sh[n].r = 0; sh[n].g = 255; sh[n].b = 0; sh[n++].pct = 20; }
+    else if (ps.invis_finished > level_time) { sh[n].r = 100; sh[n].g = 100; sh[n].b = 100; sh[n++].pct = 100; }
+    key = n;
+    for (k = 0; k < n; k++)
+        key = key * 2654435761u + ((uint32_t)sh[k].r << 24 | sh[k].g << 16 | sh[k].b << 8 | (sh[k].pct & ~3));
+    if (key == last_key)
+        return;
+    last_key = key;
+    for (i = 0; i < 256; i++) {
+        uint16_t c = lvl.palette[i];
+        int r = (c & 31) << 3, g = ((c >> 5) & 31) << 3, b = ((c >> 10) & 31) << 3;
+        for (k = 0; k < n; k++) {
+            r += (sh[k].pct * (sh[k].r - r)) >> 8;
+            g += (sh[k].pct * (sh[k].g - g)) >> 8;
+            b += (sh[k].pct * (sh[k].b - b)) >> 8;
+        }
+        pal_buf[i] = (c & 0x8000) | (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10);
+    }
+    /* the palette can only be written in a blank: at the next V blank */
+    *(volatile int32_t *)UNCACHED(&pal_dirty) = 1;
+}
+
+GCODE static void apply_settings(void)
 {
     const viewsize_t *vs = &view_sizes[cfg.size];
     if (view.lighting != cfg.lighting)
@@ -336,6 +377,7 @@ static void update_view(int *viewleaf)
     leaf = r_pointleaf(eye);
     view.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
                       && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;     /* water, slime, lava */
+    update_palette(view.underwater ? lvl.leafs[leaf].contents : 0);
     if (leaf != *viewleaf) {
         r_markleaves(leaf);
         *viewleaf = leaf;
@@ -376,7 +418,7 @@ static void update_view(int *viewleaf)
 
 /* a level into the window and everything that depends on it; both CPUs
  * are idle (the slave waits for its next frame) */
-static void load_level(int n)
+GCODE static void load_level(int n)
 {
     snd_stop_all();                 /* the mixer must let go of the old pages */
     level_init(lvl_map(n));
@@ -393,7 +435,7 @@ static void load_level(int n)
 
 /* the attract mode: the demo's level and the demo from the start (or, if
  * the cartridge has none, a game) */
-static void start_demo(void)
+GCODE static void start_demo(void)
 {
     int n = lvl_demo();
     bot_stop();
@@ -413,7 +455,7 @@ static void start_demo(void)
 }
 
 /* between frames: what the game asked for */
-static void handle_request(void)
+GCODE static void handle_request(void)
 {
     int req = g_request;
     g_request = REQ_NONE;
@@ -509,6 +551,7 @@ void pri_main(void)
             handle_request();
             last_tick = time_now();
             update_view(&viewleaf);
+            md_flush = 1;
         }
         int32_t mspin = 0, sspin;
         uint16_t fs;
@@ -550,10 +593,11 @@ void pri_main(void)
         }
 
         overlays_draw(win_x, win_y, fps10, hint_time > 0);
-        if (menu_active)
-            md_wait();              /* paused: show the menu at once */
+        if (menu_active || md_flush)
+            md_wait();              /* paused, or a new level: show it all at once */
         else
             md_pump_for(48);
+        md_flush = 0;
 
         now = frame_now;
         frames++;

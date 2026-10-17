@@ -864,7 +864,6 @@ GCODE void m_spawn(ent_t *e, int cls, int hunting)
     e->maxs[0] = e->maxs[1] = c->size;
     e->mins[2] = -24;
     e->maxs[2] = c->height;
-    e->spawned = level_time;
     if (!(c->flags & MC_FLY)) {
         /* droptofloor */
         s[0] = e->org[0]; s[1] = e->org[1]; s[2] = e->org[2] + FX(1);

@@ -4,8 +4,8 @@
 #define ZI_MIN (1 << 18)
 
 static const int32_t recip[17] = {
-    0, 65536, 32768, 21845, 16384, 13107, 10923, 9362, 8192,
-    7282, 6554, 5958, 5461, 5041, 4681, 4369, 4096
+    0, 65536, 32768, 21845, 16384, 13107, 10922, 9362, 8192,
+    7281, 6553, 5957, 5461, 5041, 4681, 4369, 4096
 };
 
 static int32_t turbtab[256];     /* two periods, so turbtab + phase needs no wrap */
@@ -16,7 +16,7 @@ static int32_t turbtab[256];     /* two periods, so turbtab + phase needs no wra
 static uint8_t liquid_copy[NLIQUID][64 * 64] __attribute__((aligned(16)));
 static int liquid_tex[NLIQUID] = { -1, -1 };
 
-static void copy_liquids(void)
+__attribute__((section(".romtext"))) static void copy_liquids(void)
 {
     int i, k, n = 0;
     for (k = 0; k < NLIQUID; k++)
@@ -78,7 +78,7 @@ void r_span_init(void)
 }
 
 /* what the span drawers keep of the level */
-void r_level_init(void)
+__attribute__((section(".romtext"))) void r_level_init(void)
 {
     copy_liquids();
 }

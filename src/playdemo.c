@@ -12,7 +12,7 @@
 #include "playdemo.h"
 #include "mdlink.h"
 
-#define PD_MAX 48                   /* things drawn in one frame */
+#define PD_MAX 40                   /* things drawn in one frame (demo1: 26) */
 #define PD_NUMS 512                 /* entity numbers */
 
 typedef struct {
@@ -29,13 +29,28 @@ typedef struct {
 static const pdhdr_t *hdr;
 static const uint8_t *demo, *fp;    /* the stream; the next frame */
 static int frame_no;
-static pdent_t ent_a[PD_MAX], ent_b[PD_MAX], *prev = ent_a, *cur = ent_b;
+
+/* the two frames' things and movers: in the memory of the movers' game
+ * state, which nothing uses while the demo plays (g_mover.c) */
+typedef struct {
+    pdent_t ent_a[PD_MAX], ent_b[PD_MAX];
+    uint8_t prev_slot[PD_NUMS];     /* entity number -> 1 + index in prev */
+    int16_t mov_a[MAX_MOVERS][3], mov_b[MAX_MOVERS][3];
+    uint8_t mov_seen[MAX_MOVERS];
+} pdmem_t;
+extern void *const mv_scratch;
+extern const int mv_scratch_size;
+#define PDM (*(pdmem_t *)mv_scratch)
+#define prev_slot PDM.prev_slot
+#define mov_a PDM.mov_a
+#define mov_b PDM.mov_b
+#define mov_seen PDM.mov_seen
+typedef char pdmem_fits[sizeof(pdmem_t) <= 64 * 48 + 64 * 16 ? 1 : -1];
+
+static pdent_t *prev, *cur;
 static int nprev, ncur;
-static uint8_t prev_slot[PD_NUMS];  /* entity number -> 1 + index in prev */
 static int16_t view_a[3], view_b[3];
 static uint16_t ang_a[2], ang_b[2];
-static int16_t mov_a[MAX_MOVERS][3], mov_b[MAX_MOVERS][3];
-static uint8_t mov_seen[MAX_MOVERS];
 static int32_t t_a, t_b, clock600;  /* frame times (1/100 s); the clock (1/600 s) */
 static int viewheight = 22;
 static int pd_weapon = -1, pd_wframe;
@@ -206,7 +221,7 @@ static int read_frame(void)
             p += 8;
             break;
         case 8: {
-            int n = p[0] >> 1;
+            int n = p[0] >> 1;      /* V_ParseDamage: half of armour + blood */
             g_flash(FLASH_DAMAGE, 3 * (n < 10 ? 10 : n));
             p += 1;
             break;
@@ -248,8 +263,12 @@ GCODE int pd_start(void)
     const lheader_t *h = lvl.hdr;
     if (!h->lump[LVL_DEMO].count)
         return 0;
+    if ((int)sizeof(pdmem_t) > mv_scratch_size)
+        return 0;
     demo = lvl.base + h->lump[LVL_DEMO].ofs;
     hdr = (const pdhdr_t *)demo;
+    prev = PDM.ent_a;
+    cur = PDM.ent_b;
     fp = demo + hdr->frames_ofs;
     frame_no = 0;
     nprev = ncur = 0;
@@ -272,8 +291,7 @@ GCODE int pd_tick(void)
         return 0;
     level_time++;
     clock600 += 10;
-    if (ps.flash)
-        ps.flash = ps.flash > 3 ? ps.flash - 3 : 0;
+    g_flash_decay();
     /* CL_GetMessage: the next frame once the clock is past the last one's time */
     while (clock600 > t_b * 6) {
         if (!read_frame()) {

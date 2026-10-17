@@ -5,9 +5,10 @@
 #define MINFREE 64
 
 
+/* the table is two-way: a face's surface may be in slot h or h ^ 1 */
 static inline int hash_key(int face, int mip)
 {
-    return ((face << 2) ^ (face >> 8) ^ mip) & (HASHSIZE - 1);
+    return (((uint32_t)face * 0x9E3779B1u) >> 23 ^ (mip << 1)) & (HASHSIZE - 2);
 }
 
 void sc_init(rcpu_t *rc, uint8_t *mem, int size, surfcache_t **hash)
@@ -221,7 +222,7 @@ static void build_surface(rcpu_t *rc, surfcache_t *sc, const lface_t *f, int mip
 surfcache_t *sc_get(rcpu_t *rc, int faceidx, int mip)
 {
     int h = hash_key(faceidx, mip);
-    surfcache_t *s = rc->sc_hash[h];
+    surfcache_t *s = rc->sc_hash[h], *s1 = rc->sc_hash[h + 1];
     const lface_t *f;
     int w, ht;
 
@@ -229,6 +230,13 @@ surfcache_t *sc_get(rcpu_t *rc, int faceidx, int mip)
         s->batch = rc->batch;
         return s;
     }
+    if (s1 && s1->key == faceidx && s1->mip == mip) {
+        s1->batch = rc->batch;
+        return s1;
+    }
+    /* a miss: into the free slot, else in place of the one used longer ago */
+    if (s && (!s1 || (uint16_t)(rc->batch - s1->batch) > (uint16_t)(rc->batch - s->batch)))
+        h++;
 
     f = &lvl.faces[faceidx];
     w = shr_mip(f->ext[0], mip);

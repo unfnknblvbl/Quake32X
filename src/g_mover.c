@@ -42,8 +42,16 @@ typedef struct {
     uint8_t  dead, shootable;
 } tstate_t;
 
-static mstate_t ms[MAX_MOVERS];
-static tstate_t ts[MAX_TRIGGERS];
+/* the movers' and triggers' state; while the attract demo plays none of
+ * it runs, and the demo player has the memory (playdemo.c) */
+static union {
+    struct { mstate_t ms[MAX_MOVERS]; tstate_t ts[MAX_TRIGGERS]; } g;
+    uint32_t align;
+} mv_mem;
+#define ms mv_mem.g.ms
+#define ts mv_mem.g.ts
+void *const mv_scratch = &mv_mem;
+const int mv_scratch_size = sizeof(mv_mem);
 
 #define TR_NOTOUCH 1
 #define SECRET_OPEN_ONCE 1
@@ -638,9 +646,19 @@ GCODE void mv_touch_player(void)
             int lead = l->group;
             int key = lmovers[lead].flags & MVF_GOLD_KEY ? IT_KEY2 : IT_KEY1;
             if (ps.items & key) {
+                /* the key goes, and opens this door and any other locked
+                   for it the player is touching (the halves of a double
+                   door are separate doors) */
+                int j, flag = lmovers[lead].flags & (MVF_SILVER_KEY | MVF_GOLD_KEY);
                 ps.items &= ~key;
-                ms[lead].unlocked = 1;
-                door_use(lead);
+                for (j = 0; j < nmovers; j++) {
+                    const lmover_t *o = &lmovers[j];
+                    if (o->cls == MV_DOOR && o->group == j && (o->flags & flag) && !ms[j].unlocked
+                        && (j == lead || box_touch(lo, hi, o->mins, o->maxs, mover_off[j]))) {
+                        ms[j].unlocked = 1;
+                        door_use(j);
+                    }
+                }
             } else if (level_time >= ms[lead].touch_finished) {
                 fixed_t c[3];
                 ms[lead].touch_finished = level_time + TICKS(2);

@@ -190,6 +190,39 @@ void game_tick(int buttons)
         if (side > speed) side = speed;
         if (side < -speed) side = -speed;
     }
+    if (ps.waterlevel >= 2 && !cfg.fly) {
+        /* SV_WaterMove: swim the way the view looks, at 0.7 of the speed;
+           drift down when idle, up while jump is held; no gravity */
+        fixed_t sp = fsin(player.pitch), cp = fcos(player.pitch), dz;
+        fwd = fixmul(fwd, 0xB333);
+        side = fixmul(side, 0xB333);
+        move_horiz(fixmul(fixmul(fwd, cp), cy) + fixmul(side, sy), fixmul(fixmul(fwd, cp), sy) - fixmul(side, cy));
+        dz = -fixmul(fwd, sp);
+        if (buttons & ACT_JUMP) {
+            fixed_t ahead[3];
+            dz += (ps.watertype == -CONTENTS_WATER ? 100 : ps.watertype == -CONTENTS_SLIME ? 80 : 50)
+                  * 65536 / 60;
+            /* CheckWaterJump: a ledge in front at the waist, room above it */
+            ahead[0] = player.pos[0] + fcos(player.yaw) * 24;
+            ahead[1] = player.pos[1] + fsin(player.yaw) * 24;
+            ahead[2] = player.pos[2] + FX(8);
+            if (ps.waterlevel == 2 && is_solid(ahead[0], ahead[1], ahead[2])
+                && !is_solid(ahead[0], ahead[1], ahead[2] + FX(24))) {
+                player.vz = 225 * 65536 / 60;
+                player.onground = 0;
+                return;
+            }
+        } else if (!fwd && !side)
+            dz -= 42 * 65536 / 60;
+        if (player.vz > 0) {        /* still rising from a jump out of the water */
+            dz += player.vz;
+            player.vz -= GRAVITY;
+            if (player.vz < 0) player.vz = 0;
+        }
+        move_vert(dz);
+        player.onground = is_solid(player.pos[0], player.pos[1], player.pos[2] - 0x10000);
+        return;
+    }
     /* right vector is (sin, -cos) */
     move_horiz(fixmul(fwd, cy) + fixmul(side, sy), fixmul(fwd, sy) - fixmul(side, cy));
 

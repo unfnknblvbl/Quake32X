@@ -96,24 +96,22 @@ typedef struct ent_s {
     int16_t  queue;                  /* index of its level record, -1 if none */
     fixed_t  org[3];
     fixed_t  vel[3];
-    int16_t  mins[3], maxs[3];       /* whole units, relative to org */
+    int8_t   mins[3], maxs[3];       /* whole units, relative to org */
     uint16_t yaw, ideal_yaw;
     /* monsters */
     const struct anim_s *anim;
     uint8_t  animpos, attack_state, hunting, lefty;
     uint32_t nextthink;
     uint32_t attack_finished, pain_finished, died;
-    uint32_t spawned;
     uint32_t seen;                   /* last tick it was near or in sight */
     int16_t  leaf;                   /* BSP leaf of org (g_relink) */
     uint8_t  light, lightdirty;      /* cached light probe for drawing */
     int16_t  owner;                  /* missiles: OWN_ or the monster that fired */
     uint16_t pitch;                  /* missiles: drawn along their flight */
     uint8_t  inpain, flags;          /* zombies' pain state; EF_ */
-    uint16_t pad;
 } ent_t;
 
-#define MAX_ENTS     112
+#define MAX_ENTS     96
 #define MAX_CORPSES  4               /* older bodies are removed */
 #define MAX_GIBS     9
 
@@ -144,7 +142,7 @@ typedef struct {
     uint32_t air_finished, dmg_time; /* drowning, slime and lava */
     int16_t  drown_dmg;
     uint8_t  waterlevel, watertype;  /* 0 dry .. 3 eyes under; CONTENTS_ (negated) */
-    uint8_t  flash, flash_type;      /* palette flash: strength, FLASH_ */
+    uint8_t  dmg_flash, bonus_flash; /* Quake's damage and bonus colour shifts (of 255) */
     int16_t  kills, total_monsters, items_got;
     int16_t  secrets, total_secrets;
     const char *msg;
@@ -165,7 +163,7 @@ typedef struct {
 
 #define PT_VISIBLE 0x80
 
-#define MAX_PARTICLES 160
+#define MAX_PARTICLES 128
 
 /* ------------------------------------------------------------------ drawing */
 
@@ -193,7 +191,7 @@ typedef struct {
     uint16_t ofs;                    /* into zbuf */
 } zrow_t;
 
-#define ZBUF_MAX 6144                /* depth samples for the whole frame */
+#define ZBUF_MAX 4608                /* depth samples for the whole frame */
 
 typedef struct {
     int       ndraw;
@@ -244,6 +242,7 @@ fixed_t g_frand(void);               /* 0 .. 1 (16.16) */
 fixed_t g_crand(void);               /* -1 .. 1 */
 void g_damage_player(int dmg, const fixed_t *from);
 void g_flash(int type, int amount);
+void g_flash_decay(void);            /* every tick */
 void g_damage(ent_t *e, int dmg);
 void g_hurt(ent_t *e, int dmg);
 void g_particles(const fixed_t org[3], const fixed_t dir[3], int color, int count);

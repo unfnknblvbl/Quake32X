@@ -501,6 +501,7 @@ def main():
                 nfrag += 1
                 per_mover[mover] = per_mover.get(mover, 0) + 1
     print('bmodel fragments:', nfrag)
+    assert len(face_recs) <= 9216, 'more faces than MAX_MAP_FACES in src/r_main.c'
     for mv_, n_ in sorted(per_mover.items(), key=lambda x: -x[1])[:6]:
         if mv_ >= 0:
             print('  mover %d (%s *%d): %d fragments, %d keyframes %d apart' % (

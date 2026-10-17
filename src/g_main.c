@@ -29,7 +29,7 @@ static pstate_t ps_start;            /* the player as the level began (a death r
 
 /* static models (torches, flames): drawn, never moved */
 #define MAX_STATICS 64
-static struct { uint8_t model, frame, light, pad; int16_t leaf; uint16_t yaw; fixed_t org[3]; } statics[MAX_STATICS];
+static struct { uint8_t model, frame; int16_t leaf; uint16_t yaw; int16_t org[3]; } statics[MAX_STATICS];
 static int nstatics;
 static uint32_t rnd32 = 0x12345678;
 
@@ -325,7 +325,7 @@ GCODE void g_new_game(void)
     memset(&ps, 0, sizeof(ps));
     ps.health = 100;
     ps.shells = 25;
-    ps.weapons = IT_SHOTGUN;
+    ps.weapons = IT_AXE | IT_SHOTGUN;
     ps.weapon = IT_SHOTGUN;
     ps_start = ps;
 }
@@ -362,12 +362,11 @@ static void add_static(int model, int frame, const lent_t *le)
     p[2] = FX(le->org[2]);
     statics[nstatics].model = model;
     statics[nstatics].frame = frame;
-    statics[nstatics].org[0] = p[0];
-    statics[nstatics].org[1] = p[1];
-    statics[nstatics].org[2] = p[2];
+    statics[nstatics].org[0] = le->org[0];
+    statics[nstatics].org[1] = le->org[1];
+    statics[nstatics].org[2] = le->org[2];
     statics[nstatics].yaw = ANG(le->angle);
     statics[nstatics].leaf = r_pointleaf(p);
-    statics[nstatics].light = 0;
     nstatics++;
 }
 
@@ -571,7 +570,7 @@ GCODE void g_damage_player(int dmg, const fixed_t *from)
         ps.armortype = 0;
     take = dmg - save;
     ps.health -= take;
-    g_flash(FLASH_DAMAGE, 3 * (save + take) + 20);
+    g_flash(FLASH_DAMAGE, 3 * ((save + take) < 10 ? 10 : save + take));
     if (ps.health <= 0) {
         ps.health = 0;
         ps.dead = 1;
@@ -624,15 +623,22 @@ GCODE void g_damage(ent_t *e, int dmg)
 
 /* ------------------------------------------------------------ the player */
 
-/* the palette flashes of damage and bonuses (Quake's cshifts) */
+/* the palette flashes of damage and bonuses (Quake's cshifts): damage
+ * adds up to 150, a bonus is 50; they fade at 150 and 100 a second */
 GCODE void g_flash(int type, int amount)
 {
-    if (amount > 150) amount = 150;
-    if (type == FLASH_DAMAGE || amount >= ps.flash || ps.flash_type == FLASH_BONUS) {
-        if (type != ps.flash_type || amount > ps.flash)
-            ps.flash = amount;
-        ps.flash_type = type;
-    }
+    if (type == FLASH_DAMAGE) {
+        amount += ps.dmg_flash;
+        ps.dmg_flash = amount > 150 ? 150 : amount;
+    } else
+        ps.bonus_flash = 50;
+}
+
+GCODE void g_flash_decay(void)
+{
+    int d = (level_time & 1) ? 3 : 2, b = (level_time % 3) ? 2 : 1;
+    ps.dmg_flash = ps.dmg_flash > d ? ps.dmg_flash - d : 0;
+    ps.bonus_flash = ps.bonus_flash > b ? ps.bonus_flash - b : 0;
 }
 
 static void message(const char *m)
@@ -905,8 +911,7 @@ GCODE void g_tick(int buttons, int pressed)
         return;
     }
     level_time++;
-    if (ps.flash)
-        ps.flash = ps.flash > 3 ? ps.flash - 3 : 0;
+    g_flash_decay();
 
     if (ps.dead) {
         /* respawn at the start after two seconds and a button */
@@ -1106,8 +1111,13 @@ GCODE void g_build_scene(void)
     }
     /* torches and flames */
     for (i = 0; i < nstatics; i++)
-        if (LEAF_VISIBLE(statics[i].leaf))
-            add_draw(models[statics[i].model], statics[i].frame, 0, statics[i].org, statics[i].yaw, 0, 0);
+        if (LEAF_VISIBLE(statics[i].leaf)) {
+            fixed_t o[3];
+            o[0] = FX(statics[i].org[0]);
+            o[1] = FX(statics[i].org[1]);
+            o[2] = FX(statics[i].org[2]);
+            add_draw(models[statics[i].model], statics[i].frame, 0, o, statics[i].yaw, 0, 0);
+        }
     n = ndraw;
     /* depth for as many as fit; the biggest (nearest) on screen are drawn
        back to front without it */

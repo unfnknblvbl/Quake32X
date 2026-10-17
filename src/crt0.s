@@ -184,7 +184,7 @@ _md_data:
         .else
         /* compatible build: stacks in SDRAM, normal 4-way cache */
         .equ    pri_stack, 0x06040000
-        .equ    sec_stack, 0x0603E000      /* 4 KB; the master has 8 KB above it */
+        .equ    sec_stack, 0x0603E800      /* 2 KB (it uses under 1 KB); the master has 6 KB above it (it uses about 2.5 KB) */
         .equ    CCR_ON, 0x11
         .endif
 
@@ -329,6 +329,27 @@ pri_irq:
         or      r0,r2
         mov.w   r2,@r1
 
+        /* a new palette (Quake's colour shifts, main.c): CRAM can only be
+           written in a blank */
+        mov.l   _pi_paldirty,r1
+        mov.l   @r1,r0
+        tst     r0,r0
+        bt      9f
+        mov.l   r3,@-r15
+        mov     #0,r0
+        mov.l   r0,@r1
+        mov.l   _pi_palbuf,r1
+        mov.l   _pi_cram,r2
+        mov     #64,r0
+        shll    r0                      /* 128 longs: 256 colours */
+8:
+        mov.l   @r1+,r3
+        mov.l   r3,@r2
+        dt      r0
+        bf/s    8b
+        add     #4,r2
+        mov.l   @r15+,r3
+9:
         mov.l   _pi_frt,r1
         mov     #0xE2,r0                /* TOCR: output 1 on compare match */
         mov.b   r0,@(0x07,r1)
@@ -350,6 +371,9 @@ _pi_adapter:    .long   0x20004000
 _pi_vbcount:    .long   _vblank_count+0x20000000
 _pi_comm12:     .long   0x2000402C
 _pi_padlatch:   .long   _pad_latch+0x20000000
+_pi_paldirty:   .long   _pal_dirty+0x20000000
+_pi_palbuf:     .long   _pal_buf+0x20000000
+_pi_cram:       .long   0x20004200
 
 !-----------------------------------------------------------------------
 ! Slave SH-2

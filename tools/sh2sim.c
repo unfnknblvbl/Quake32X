@@ -886,7 +886,7 @@ static void step(cpu_t *c)
     }
     uint64_t sr0 = c->stall_sdram, sw0 = c->stall_sdramw, ro0 = c->stall_rom, fb0 = c->stall_fb, dv0 = c->stall_div + c->stall_mul;
     exec(c, pc, 0);
-    if (c->r[15] < c->minsp && c->r[15] >= 0xC0000000) c->minsp = c->r[15];
+    if (c->r[15] < c->minsp && (c->r[15] >= 0xC0000000 || ((c->r[15] & 0x1FFFFFFF) >= 0x06030000 && (c->r[15] & 0x1FFFFFFF) < 0x06040000))) c->minsp = c->r[15];
     if ((pc >> 29) == 6 && oram_base)
         pc = oram_base + (pc & 0xFFF);   /* on-chip copy: attribute to the SDRAM original */
     if (romprof[c->id] && (pc & 0x1FFFFFFF) >= 0x02000000 && (pc & 0x1FFFFFFF) < 0x02400000)

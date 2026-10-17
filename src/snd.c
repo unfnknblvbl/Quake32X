@@ -75,11 +75,11 @@ static const uint8_t *sound_base;
 
 /* static sound emitters of the level */
 #define MAX_STATIC 64
-static struct { fixed_t org[3]; uint8_t sound, vol; } statics[MAX_STATIC];
+static struct { int16_t org[3]; uint8_t sound, vol; } statics[MAX_STATIC];   /* whole units */
 static int nstatic;
 static uint8_t st_sound[NSTATIC], st_lvol[NSTATIC], st_rvol[NSTATIC];
 
-static void put_cmd(int sound, int lv, int rv, int chan)
+GCODE static void put_cmd(int sound, int lv, int rv, int chan)
 {
     volatile uint16_t *head = (volatile uint16_t *)QV(&q_head);
     volatile uint16_t *tail = (volatile uint16_t *)QV(&q_tail);
@@ -96,7 +96,7 @@ static void put_cmd(int sound, int lv, int rv, int chan)
 
 /* the level's sounds; everything that plays stops first (the mixer must
  * not read the old level's pages once they are mapped out) */
-void snd_init(void)
+GCODE void snd_init(void)
 {
     int i;
     /* (the slave reads these two cache-through) */
@@ -107,7 +107,7 @@ void snd_init(void)
         st_sound[i] = CMD_SILENCE;
 }
 
-void snd_stop_all(void)
+GCODE void snd_stop_all(void)
 {
     volatile uint16_t *head = (volatile uint16_t *)QV(&q_head);
     volatile uint16_t *tail = (volatile uint16_t *)QV(&q_tail);
@@ -129,7 +129,7 @@ GCODE void snd_stop_dynamic(void)
 
 /* Quake's SND_Spatialize: full volume up close, silent at 1000 / att
  * units; panned by the listener's right vector. 0 if out of hearing */
-static int spatialize(const fixed_t *org, int vol, int att, int *lv, int *rv)
+GCODE static int spatialize(const fixed_t *org, int vol, int att, int *lv, int *rv)
 {
     fixed_t d[3], len, dot;
     int a, dist;
@@ -179,9 +179,9 @@ GCODE void snd_static(int sound, const fixed_t org[3], int vol)
 {
     if (nstatic >= MAX_STATIC || sound < 0 || sound >= SND_NUM || !sound_table[sound * 3])
         return;
-    statics[nstatic].org[0] = org[0];
-    statics[nstatic].org[1] = org[1];
-    statics[nstatic].org[2] = org[2];
+    statics[nstatic].org[0] = UNITS(org[0]);
+    statics[nstatic].org[1] = UNITS(org[1]);
+    statics[nstatic].org[2] = UNITS(org[2]);
     statics[nstatic].sound = sound;
     statics[nstatic].vol = vol;
     nstatic++;
@@ -198,10 +198,14 @@ GCODE void snd_update(void)
     }
     for (i = 0; i < nstatic; i++) {
         int lv, rv, v, j;
-        int dx = UNITS(statics[i].org[0] - view.org[0]), dy = UNITS(statics[i].org[1] - view.org[1]);
+        int dx = statics[i].org[0] - UNITS(view.org[0]), dy = statics[i].org[1] - UNITS(view.org[1]);
+        fixed_t o[3];
         if (dx < -340 || dx > 340 || dy < -340 || dy > 340)
             continue;
-        if (!spatialize(statics[i].org, statics[i].vol, 3, &lv, &rv))
+        o[0] = FX(statics[i].org[0]);
+        o[1] = FX(statics[i].org[1]);
+        o[2] = FX(statics[i].org[2]);
+        if (!spatialize(o, statics[i].vol, 3, &lv, &rv))
             continue;
         v = lv + rv;
         /* the same sound twice: the louder one only */
