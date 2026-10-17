@@ -77,6 +77,14 @@ void hud_draw(int fps10, int split)
     draw_text(4, 11, buf, 0);
 }
 
+/* controls reminder shown at start-up */
+void hint_draw(void)
+{
+    shade_box(0, 86, 320, 112);
+    draw_text(8, 88, "D-PAD: MOVE/TURN   A+D-PAD: STRAFE/LOOK", 0);
+    draw_text(8, 99, "B: JUMP   START: MENU (TEXTURES, LIGHT)", 0);
+}
+
 void menu_input(int pressed)
 {
     int delta = 0;

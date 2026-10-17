@@ -21,8 +21,8 @@ static void (*span_tex_p)(texargs_t *);
 /* copy the hand-written loops into this CPU's on-chip RAM */
 void r_oram_init(void)
 {
-#ifdef NO_ORAM_CODE
-    span_tex_p = span_tex;          /* run the loop from SDRAM instead */
+#if !defined(ONCHIP) || defined(NO_ORAM_CODE)
+    span_tex_p = span_tex;          /* compatible build: run the loop from SDRAM */
 #else
     memcpy((void *)ORAM_BASE, oram_code_start, oram_code_end - oram_code_start);
     span_tex_p = ORAM_FN(span_tex);

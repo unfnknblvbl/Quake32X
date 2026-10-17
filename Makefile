@@ -31,8 +31,16 @@ data/$(MAP).lvl: tools/mkmap.py data/pak0.pak
 build/level.lvl: data/$(MAP).lvl | build
 	cp $< $@
 
+# FAST=1: stacks and the span loop in SH-2 on-chip RAM (two-way cache mode).
+# Faster, but needs an emulator/hardware that supports the cache data array
+# as RAM. The default build avoids it.
+ifeq ($(FAST),1)
+ASDEFS  = --defsym ONCHIP=1
+CFLAGS += -DONCHIP
+endif
+
 build/crt0.o: src/crt0.s build/m68k.bin build/level.lvl
-	$(AS) --big -o $@ $<
+	$(AS) --big $(ASDEFS) -o $@ $<
 
 build/%.o: src/%.s | build
 	$(AS) --big -o $@ $<

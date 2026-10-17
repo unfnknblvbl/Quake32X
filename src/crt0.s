@@ -169,9 +169,18 @@
 !-----------------------------------------------------------------------
         .section .vectors,"ax"
 
-        /* each CPU's stack lives in its own on-chip RAM (two-way cache mode) */
+        .ifdef  ONCHIP
+        /* fast build: each CPU's stack lives in its own 2 KB of on-chip RAM
+           (two-way cache mode) */
         .equ    pri_stack, 0xC0000800
         .equ    sec_stack, 0xC0000800
+        .equ    CCR_ON, 0x19
+        .else
+        /* compatible build: stacks in SDRAM, normal 4-way cache */
+        .equ    pri_stack, 0x06040000
+        .equ    sec_stack, 0x0603F000
+        .equ    CCR_ON, 0x11
+        .endif
 
         .align  4
 pri_vbr:
@@ -263,7 +272,7 @@ pri_start:
         ldc     r0,sr                   /* allow ints (level > 1) */
 
         mov.l   _p_cctl,r0              /* purge, two-way mode + enable cache */
-        mov     #0x19,r1
+        mov     #CCR_ON,r1
         mov.b   r1,@r0
 
         mov.l   _p_main,r0
@@ -291,19 +300,14 @@ pri_irq:
         mov.l   r0,@-r15
         mov.l   r1,@-r15
         mov.l   r2,@-r15
-        sts.l   pr,@-r15
 
+        /* interrupt "bump" (as in Doom 32X Resurrection): FTOA low now,
+           high again after the work below, so the pin actually toggles on
+           a compare match before the V interrupt is cleared */
         mov.l   _pi_frt,r1
-        mov     #0xE0,r0                /* TOCR: output 0 */
+        mov     #0xE0,r0                /* TOCR: output 0 on compare match */
         mov.b   r0,@(0x07,r1)
         mov.b   @(0x07,r1),r0
-        mov     #0xE2,r0                /* TOCR: output 1 - acks the irq */
-        mov.b   r0,@(0x07,r1)
-        mov.b   @(0x07,r1),r0
-
-        mov.l   _pi_adapter,r1
-        mov.w   r0,@(0x16,r1)           /* clear V IRQ */
-        mov.w   r0,@(0x14,r1)           /* clear VRES IRQ */
 
         mov.l   _pi_vbcount,r1          /* ++vblank_count (cache-through) */
         mov.l   @r1,r0
@@ -317,7 +321,15 @@ pri_irq:
         or      r0,r2
         mov.w   r2,@r1
 
-        lds.l   @r15+,pr
+        mov.l   _pi_frt,r1
+        mov     #0xE2,r0                /* TOCR: output 1 on compare match */
+        mov.b   r0,@(0x07,r1)
+        mov.b   @(0x07,r1),r0
+
+        mov.l   _pi_adapter,r1
+        mov.w   r0,@(0x16,r1)           /* clear V IRQ */
+        mov.w   r0,@(0x14,r1)           /* clear VRES IRQ */
+
         mov.l   @r15+,r2
         mov.l   @r15+,r1
         mov.l   @r15+,r0
@@ -369,7 +381,7 @@ sec_start:
         ldc     r0,sr
 
         mov.l   _s_cctl,r0              /* purge, two-way mode + enable cache */
-        mov     #0x19,r1
+        mov     #CCR_ON,r1
         mov.b   r1,@r0
 
         mov.l   _s_main,r0

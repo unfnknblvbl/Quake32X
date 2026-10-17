@@ -19,6 +19,12 @@ monsters, items, weapons, sound or game logic yet.
 | C | fly down (fly mode) |
 | START | pause menu |
 
+The controls are shown at the bottom of the screen for the first few seconds.
+
+Input and timing don't depend on any single interrupt. The game clock follows
+whichever vblank counter is running, either the 68000's or the master SH-2's,
+and the master also samples the pad between render batches.
+
 **Pause menu.** Up/Down picks an item, Left/Right or A/B/C changes it. The
 scene keeps rendering behind the menu, so every change shows up immediately.
 
@@ -110,9 +116,9 @@ At runtime, each frame goes like this:
 
 Other tricks:
 
-* **Two-way cache mode.** Each SH-2's stack and the span loop live in its 2 KB
-  of on-chip RAM (0xC0000000). Register spills then avoid the write-through
-  SDRAM bus, and the hot loop never misses the cache.
+* **Two-way cache mode** (`FAST=1` only). Each SH-2's stack and the span
+  loop live in its 2 KB of on-chip RAM (0xC0000000). Register spills then
+  avoid the write-through SDRAM bus, and the hot loop never misses the cache.
 * **No variable shifts.** The SH-2 has no barrel shifter, and GCC turns
   `x >> n` into library calls. Mip levels and bit tests are written to avoid
   them.
@@ -129,12 +135,15 @@ Requirements:
 * Quake's `pak0.pak` copied to `data/pak0.pak`.
 
 ```
-make                          # -> quake32x.32x (2 MB)
-make EXTRA_CFLAGS=-DNO_ORAM_CODE   # keep the span loop in SDRAM (about 2% slower)
+make            # -> quake32x.32x (2 MB), the compatible build
+make FAST=1     # stacks and span loop in SH-2 on-chip RAM (two-way cache mode)
 ```
 
-The ROM contains level data converted from id Software's Quake shareware
-files. Use it yourself, but don't redistribute it.
+The default build uses the normal 4-way cache and keeps everything in SDRAM.
+That is within a few percent of the `FAST=1` build and works on emulators
+that don't implement the SH-2 cache-as-RAM mode.
+
+E1M1 is part of the Quake shareware episode, so the ROM can be shared.
 
 ## Tools
 
@@ -155,6 +164,5 @@ files. Use it yourself, but don't redistribute it.
   through PWM.
 * Assembly versions of geometry stages B and C, which are the biggest
   remaining cost.
-* Hardware verification. Everything has been checked in PicoDrive and the
-  cycle model, but not on a real 32X. The riskiest part is running code from
-  the cache data array; `-DNO_ORAM_CODE` removes that dependency.
+* Hardware verification. Everything has been checked in PicoDrive (dynarec
+  and interpreter) and the cycle model, but not on a real 32X.

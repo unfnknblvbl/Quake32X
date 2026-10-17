@@ -217,5 +217,6 @@ void draw_spans_sky(rcpu_t *rc, const frec_t *fr);
 void draw_spans_turb(rcpu_t *rc, const frec_t *fr);
 void fill_gaps(rcpu_t *rc);
 void draw_batch(rcpu_t *rc);
+extern void (*r_poll_hook)(void);   /* called by the master between batches */
 
 #endif

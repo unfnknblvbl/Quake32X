@@ -293,9 +293,13 @@ static void draw_range(rcpu_t *rc, int a, int b)
 }
 
 /* shade and draw all face records of the batch */
+void (*r_poll_hook)(void);
+
 void draw_batch(rcpu_t *rc)
 {
     int i, start = 0, n = rc->nfrec;
+    if (rc->cpu == 0 && r_poll_hook)
+        r_poll_hook();
     wait_fb(rc);
     if (++rc->batch == 0xFFFF) rc->batch = 1;
     for (i = 0; i < n; i++) {

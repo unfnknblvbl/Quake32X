@@ -12,11 +12,39 @@ volatile uint16_t *r_fb;
 #define MASTER_DONE  MARS_SYS_COMM8
 #define PAD          MARS_SYS_COMM12
 
+#ifdef ONCHIP
 #define FREE_TOP     0x06040000      /* stacks are in on-chip RAM */
+#define CCR_PURGE    0x19            /* purge, keep two-way mode */
+#else
+#define FREE_TOP     0x0603E000      /* two 4 KB stacks above this */
+#define CCR_PURGE    0x11            /* purge, 4-way cache */
+#endif
 
 static rcpu_t rcpu[2];
 static surfcache_t *schash[2][HASHSIZE];
 static volatile int32_t slave_spin;
+static uint16_t pad_poll;           /* pad samples taken by the master while rendering */
+static int hint_time = 8 * 60;      /* show the controls for the first 8 seconds */
+
+/* 60 Hz time from whichever vblank counter is running: the 68000's (COMM14)
+   or the master SH-2's interrupt. Either one alone keeps the game going. */
+static uint32_t time_now(void)
+{
+    static uint16_t last68;
+    static uint32_t lastirq, t;
+    uint16_t c = MARS_SYS_COMM14;
+    uint32_t v = get_vblank_count();
+    uint32_t d68 = (uint16_t)(c - last68), dirq = v - lastirq;
+    last68 = c;
+    lastirq = v;
+    t += d68 > dirq ? d68 : dirq;
+    return t;
+}
+
+static void poll_pad(void)
+{
+    pad_poll |= PAD;
+}
 
 void *memcpy(void *dst, const void *src, unsigned n)
 {
@@ -72,23 +100,31 @@ static void apply_settings(void)
 }
 
 /* input, game ticks, view and PVS for the next frame */
+static uint32_t frame_now;
+
 static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
 {
-    uint32_t now = get_vblank_count();
+    uint32_t now = time_now();
     int ticks = now - *last_tick;
     volatile uint16_t *latch = UNCACHED(&pad_latch);
     uint16_t pad = PAD, seen, pressed;
     fixed_t eye[3];
     int leaf;
 
-    seen = *latch;
+    seen = *latch | pad_poll;
     *latch = 0;
+    pad_poll = 0;
     if (pad & BTN_NOPAD) pad = 0;
     if (seen & BTN_NOPAD) seen = 0;
     pressed = (seen | pad) & ~*oldpad;
     *oldpad = pad;
     *last_tick = now;
+    frame_now = now;
     if (ticks > 6) ticks = 6;
+    if (hint_time > 0) {
+        hint_time -= ticks;
+        if (pressed) hint_time = 0;
+    }
 
     if (pressed & BTN_START) {
         menu_active ^= 1;
@@ -138,7 +174,8 @@ void pri_main(void)
     view.cachegen = 1;
     view.mipbias = 0;
     apply_settings();
-    last_tick = fps_tick = get_vblank_count();
+    r_poll_hook = poll_pad;
+    last_tick = fps_tick = time_now();
     view.flip_fs = MARS_VDP_FBCTL & MARS_VDP_FS;
     update_frame(&last_tick, &viewleaf, &oldpad);
 
@@ -177,8 +214,10 @@ void pri_main(void)
             menu_draw();
         if (cfg.showfps)
             hud_draw(fps10, split);
+        if (hint_time > 0 && !menu_active)
+            hint_draw();
 
-        now = get_vblank_count();
+        now = frame_now;
         frames++;
         if (now - fps_tick >= 60) {
             fps10 = hw_div(frames * 600, now - fps_tick);
@@ -210,7 +249,7 @@ void sec_main(void)
         int32_t spin = 0;
         while ((tag = SLAVE_GO) == last) ;
         last = tag;
-        SH2_CCR = 0x19;     /* purge (keep two-way mode): see the master's fresh view/PVS data */
+        SH2_CCR = CCR_PURGE;    /* purge: see the master's fresh view/PVS data */
         r_render(&rcpu[1], view.split, SCREENH);
         SLAVE_DONE = tag;
         while (MASTER_DONE != tag)

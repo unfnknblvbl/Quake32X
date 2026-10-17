@@ -32,6 +32,7 @@ extern int menu_active;
 void menu_input(int pressed);
 void menu_draw(void);
 void hud_draw(int fps10, int split);
+void hint_draw(void);
 void draw_text(int x, int y, const char *s, int hi);
 
 #endif
