@@ -59,6 +59,9 @@ typedef struct {
     /* interrupts */
     uint16_t intmask;
     int      vint_pending;
+    /* DMA channel 1 (the PWM's) */
+    uint32_t sar1, dar1, tcr1, chcr1, vcr1, dmaor;
+    uint64_t dma_words;
     int      id;
     int      sleeping;
     /* stats */
@@ -77,6 +80,14 @@ static uint64_t bus_free;            /* shared external bus */
 static int fb_fifo; static uint64_t fb_fifo_t;
 static cpu_t cpu[2];
 static uint64_t now_vbl;              /* vblank count */
+/* PWM: 3-deep FIFOs per side, one sample out every (cycle - 1) clocks */
+static uint16_t pwm_ctrl, pwm_cycle, pwm_fifo[2][3], pwm_out[2];
+static int pwm_n[2];
+static uint64_t pwm_next = ~0ULL;
+static FILE *audio;
+static uint64_t audio_frames;
+static uint32_t watch_addr[4];
+static int watch_n[4], nwatch;
 static uint16_t pad_now;
 static int noirq;           /* test: SH-2 VBlank interrupts never arrive */
 /* render timing: GO = COMM4 write by master, slave done = COMM6 write, master done = its first COMM6 poll */
@@ -93,6 +104,8 @@ static uint64_t *prof[2];
 static uint64_t *profc[2][NCAT];
 #define PROF_SHIFT 1
 #define PROF_SIZE  (0x40000 >> PROF_SHIFT)
+#define ROMPROF_SIZE ((4 << 20) >> PROF_SHIFT)
+static uint64_t *romprof[2];
 
 static uint32_t rd_be(const uint8_t *p, int size);
 static void die(cpu_t *c, const char *msg, uint32_t v)
@@ -199,6 +212,65 @@ static uint16_t fbctl_read(cpu_t *c)
     return v;
 }
 
+static void pwm_push(int side, uint16_t v)
+{
+    if (pwm_n[side] < 3) pwm_fifo[side][pwm_n[side]++] = v & 0xFFF;
+}
+
+static uint32_t sdram_or_rom_read32(uint32_t a);
+
+/* the PWM requests DMA while its FIFO has room (RTP); channel 1 of either
+   CPU, if running on external requests, moves longs to the pulse registers */
+static void dma_dreq(uint64_t t)
+{
+    int i;
+    if (!(pwm_ctrl & 0x80)) return;
+    for (i = 0; i < 2; i++) {
+        cpu_t *c = &cpu[i];
+        while ((c->dmaor & 1) && (c->chcr1 & 3) == 1 && !(c->chcr1 & 0x200) && c->tcr1 && pwm_n[0] < 3) {
+            uint32_t v = sdram_or_rom_read32(c->sar1);
+            uint32_t d = c->dar1 & 0x3F;
+            if ((c->chcr1 & 0xC00) == 0x800) {            /* long */
+                if (d == 0x34) { pwm_push(0, v >> 16); pwm_push(1, v); }
+                else if (d == 0x38) { pwm_push(0, v); pwm_push(1, v); }
+                c->sar1 += ((c->chcr1 >> 12) & 3) == 1 ? 4 : 0;
+            } else {                                      /* word */
+                uint16_t w = (c->sar1 & 2) ? v : v >> 16;
+                if (d == 0x34) pwm_push(0, w); else if (d == 0x36) pwm_push(1, w);
+                else { pwm_push(0, w); pwm_push(1, w); }
+                c->sar1 += ((c->chcr1 >> 12) & 3) == 1 ? 2 : 0;
+            }
+            bus_free = (bus_free > t ? bus_free : t) + 4;
+            c->dma_words++;
+            if (--c->tcr1 == 0) c->chcr1 |= 2;           /* TE */
+        }
+    }
+}
+
+static void pwm_tick(void)
+{
+    int k;
+    for (k = 0; k < 2; k++)
+        if (pwm_n[k]) {
+            pwm_out[k] = pwm_fifo[k][0];
+            pwm_fifo[k][0] = pwm_fifo[k][1];
+            pwm_fifo[k][1] = pwm_fifo[k][2];
+            pwm_n[k]--;
+        }
+    if (audio) {
+        int16_t smp[2];
+        for (k = 0; k < 2; k++) {
+            int mid = pwm_cycle / 2;
+            int v = mid ? ((int)pwm_out[k] - mid) * 32767 / mid : 0;
+            smp[k] = v > 32767 ? 32767 : v < -32767 ? -32767 : v;
+        }
+        fwrite(smp, 2, 2, audio);
+        audio_frames++;
+    }
+    dma_dreq(pwm_next);
+    pwm_next += pwm_cycle > 1 ? pwm_cycle - 1 : 1000;
+}
+
 static uint32_t onchip_read(cpu_t *c, uint32_t a, int size)
 {
     uint32_t off = a & 0x1FF;
@@ -212,6 +284,14 @@ static uint32_t onchip_read(cpu_t *c, uint32_t a, int size)
         }
     }
     if (off == 0x92) return c->ccr;
+    switch (off) {
+    case 0x190: return c->sar1;
+    case 0x194: return c->dar1;
+    case 0x198: return c->tcr1;
+    case 0x19C: return c->chcr1;
+    case 0x1A8: return c->vcr1;
+    case 0x1B0: return c->dmaor;
+    }
     return rd_be(&c->onchip[off], size);
 }
 
@@ -252,6 +332,18 @@ static void onchip_write(cpu_t *c, uint32_t a, int size, uint32_t v)
         c->ccr = v & 0xEF;
         return;
     }
+    switch (off) {
+    case 0x190: c->sar1 = v; return;
+    case 0x194: c->dar1 = v; return;
+    case 0x198: c->tcr1 = v & 0xFFFFFF; return;
+    case 0x19C:
+        /* TE is cleared by writing 0 after reading it as 1 */
+        c->chcr1 = (v & ~2u) | (c->chcr1 & v & 2);
+        dma_dreq(c->cyc);
+        return;
+    case 0x1A8: c->vcr1 = v & 0x7F; return;
+    case 0x1B0: c->dmaor = v & 0xF; return;
+    }
     wr_be(&c->onchip[off], size, v);
 }
 
@@ -271,6 +363,12 @@ static uint32_t reg_read(cpu_t *c, uint32_t a, int size)
         return (off & 1) ? (comm[i] & 0xFF) : (comm[i] >> 8);
     }
     if (off == 0x00 || off == 0x01) return size == 1 ? (off ? c->intmask & 0xFF : 0x80) : (0x8000 | c->intmask);
+    if (off == 0x30) return pwm_ctrl;
+    if (off == 0x32) return pwm_cycle;
+    if (off >= 0x34 && off < 0x3A) {
+        int sd = off == 0x36 ? 1 : 0;
+        return (pwm_n[sd] >= 3 ? 0x8000 : 0) | (pwm_n[sd] == 0 ? 0x4000 : 0);
+    }
     if (off == 0x100) return vdp_mode;
     if (off == 0x10A || off == 0x10B) return size == 1 ? (off & 1 ? fbctl_read(c) & 0xFF : fbctl_read(c) >> 8) : fbctl_read(c);
     if (off >= 0x200 && off < 0x400) return cram[(off - 0x200) >> 1];
@@ -297,12 +395,41 @@ static void reg_write(cpu_t *c, uint32_t a, int size, uint32_t v)
         else comm[i] = (comm[i] & 0xFF) | (v << 8);
         return;
     }
+    if (off == 0x30) { pwm_ctrl = v; return; }
+    if (off == 0x32) {
+        pwm_cycle = v & 0xFFF;
+        if (pwm_next == ~0ULL) {
+            pwm_next = c->cyc + pwm_cycle;
+            /* silence from power-on, so the audio lines up with the video */
+            if (audio && pwm_cycle > 1) {
+                uint64_t n = c->cyc / (pwm_cycle - 1);
+                static const int16_t z[2] = { 0, 0 };
+                while (n--) { fwrite(z, 2, 2, audio); audio_frames++; }
+            }
+        }
+        return;
+    }
+    if (off == 0x34) {
+        if (size == 4) { pwm_push(0, v >> 16); pwm_push(1, v); }
+        else pwm_push(0, v);
+        return;
+    }
+    if (off == 0x36) { pwm_push(1, v); return; }
+    if (off == 0x38) { pwm_push(0, v); pwm_push(1, v); return; }
     if (off == 0x01 && size == 1) { c->intmask = v & 0x0F; return; }
     if (off == 0x00 && size == 2) { c->intmask = v & 0x0F; return; }
     if (off == 0x16) { c->vint_pending = 0; return; }
     if (off == 0x100) { vdp_mode = v; return; }
     if (off == 0x10A || off == 0x10B) { fs_pending = v & 1; t_flipreq = c->cyc; return; }
     if (off >= 0x200 && off < 0x400) { cram[(off - 0x200) >> 1] = v; return; }
+}
+
+static uint32_t sdram_or_rom_read32(uint32_t a)
+{
+    uint32_t pa = a & 0x1FFFFFFF;
+    if (pa >= 0x06000000 && pa < 0x06040000) return rd_be(&sdram[pa - 0x06000000], 4);
+    if (pa >= 0x02000000 && pa - 0x02000000 < romsize) return rd_be(&rom[pa - 0x02000000], 4);
+    return 0;
 }
 
 static uint32_t mem_read(cpu_t *c, uint32_t a, int size)
@@ -719,11 +846,20 @@ static void step(cpu_t *c)
         take_irq(c, 12, 70);
         return;
     }
+    if ((c->chcr1 & 6) == 6) {                  /* DMA 1 end, interrupt enabled */
+        int lvl = (rd_be(&c->onchip[0xE2], 2) >> 8) & 15;
+        if (lvl > ((c->sr >> 4) & 15)) {
+            take_irq(c, lvl, c->vcr1);
+            return;
+        }
+    }
     uint64_t sr0 = c->stall_sdram, sw0 = c->stall_sdramw, ro0 = c->stall_rom, fb0 = c->stall_fb, dv0 = c->stall_div + c->stall_mul;
     exec(c, pc, 0);
     if (c->r[15] < c->minsp && c->r[15] >= 0xC0000000) c->minsp = c->r[15];
     if ((pc >> 29) == 6 && oram_base)
         pc = oram_base + (pc & 0xFFF);   /* on-chip copy: attribute to the SDRAM original */
+    if (romprof[c->id] && (pc & 0x1FFFFFFF) >= 0x02000000 && (pc & 0x1FFFFFFF) < 0x02400000)
+        romprof[c->id][(pc & 0x3FFFFF) >> PROF_SHIFT] += c->cyc - c0;
     if (prof[c->id] && (pc & 0x1FFFFFFF) >= 0x06000000 && (pc & 0x1FFFFFFF) < 0x06040000) {
         int k = (pc & 0x3FFFF) >> PROF_SHIFT;
         prof[c->id][k] += c->cyc - c0;
@@ -829,6 +965,21 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-noirq")) noirq = 1;
         else if (!strcmp(argv[i], "-video") && i + 1 < argc) video = fopen(argv[++i], "wb");
         else if (!strcmp(argv[i], "-vlog") && i + 1 < argc) vlog = fopen(argv[++i], "w");
+        else if (!strcmp(argv[i], "-audio") && i + 1 < argc) audio = fopen(argv[++i], "wb");
+        else if (!strcmp(argv[i], "-watch") && i + 2 < argc && nwatch < 4) {
+            /* -watch symbol|address nlongs: appended to each -vlog line */
+            const char *w = argv[++i];
+            int k;
+            FILE *sf = fopen(argv[2], "r");
+            watch_addr[nwatch] = strtoul(w, NULL, 16);
+            while (sf && fgets(line, sizeof(line), sf)) {
+                unsigned a; char t, name[128];
+                if (sscanf(line, "%x %c %127s", &a, &t, name) == 3 && !strcmp(name, w)) watch_addr[nwatch] = a;
+            }
+            if (sf) fclose(sf);
+            (void)k;
+            watch_n[nwatch++] = atoi(argv[++i]);
+        }
         else if (!strcmp(argv[i], "-hot") && i + 1 < argc) { doprof = 1; hotn = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "-hotcat") && i + 1 < argc) { hotcat = atoi(argv[++i]); }
     }
@@ -853,6 +1004,7 @@ int main(int argc, char **argv)
             int k;
             prof[i] = calloc(PROF_SIZE, sizeof(uint64_t));
             for (k = 1; k < NCAT; k++) profc[i][k] = calloc(PROF_SIZE, sizeof(uint64_t));
+            romprof[i] = calloc(ROMPROF_SIZE, sizeof(uint64_t));
         }
     }
     memset(comm, 0, sizeof(comm));
@@ -862,6 +1014,7 @@ int main(int argc, char **argv)
     while (cpu[0].cyc < end || cpu[1].cyc < end) {
         cpu_t *c = cpu[0].cyc <= cpu[1].cyc ? &cpu[0] : &cpu[1];
         uint64_t t = c->cyc;
+        while (pwm_next <= t) pwm_tick();
         if (t >= next_vbl) {
             /* vblank: frame swap, IRQ, pad */
             if (fs_pending != 0xFFFF) {
@@ -871,7 +1024,14 @@ int main(int argc, char **argv)
             for (i = 0; i < nshots; i++)
                 if (shots[i].vbl == (int)now_vbl) save_shot(shots[i].file);
             if (video) write_frame(video);
-            if (vlog) fprintf(vlog, "%llu %u %u\n", (unsigned long long)now_vbl, comm[0], comm[1]);
+            if (vlog) {
+                int w, k;
+                fprintf(vlog, "%llu %u %u", (unsigned long long)now_vbl, comm[0], comm[1]);
+                for (w = 0; w < nwatch; w++)
+                    for (k = 0; k < watch_n[w]; k++)
+                        fprintf(vlog, " %d", (int32_t)rd_be(&sdram[(watch_addr[w] & 0x3FFFF) + 4 * k], 4));
+                fprintf(vlog, "\n");
+            }
             now_vbl++;
             pad_now = 0;
             for (i = 0; i < npads; i++)
@@ -888,6 +1048,12 @@ int main(int argc, char **argv)
 
     if (video) fclose(video);
     if (vlog) fclose(vlog);
+    if (audio) {
+        fclose(audio);
+        printf("audio: %llu stereo frames at %.1f Hz (PWM cycle %u), DMA words %llu/%llu\n",
+               (unsigned long long)audio_frames, pwm_cycle > 1 ? (double)SH2_HZ / (pwm_cycle - 1) : 0.0, pwm_cycle,
+               (unsigned long long)cpu[0].dma_words, (unsigned long long)cpu[1].dma_words);
+    }
     printf("simulated %.2f s, %llu vblanks, fps10 (COMM2) = %u\n", seconds, (unsigned long long)now_vbl, comm[1]);
     if (nframes_r)
         printf("frames %llu: avg render master %.2f ms, slave %.2f ms; avg frame %.2f ms\n", (unsigned long long)nframes_r,
@@ -933,6 +1099,30 @@ int main(int argc, char **argv)
                 printf("  %-22s %5.1f%%   %5.1f   %5.1f  %5.1f %5.1f  %5.1f\n", syms[order[k]].name, 100.0 * pp[0] / tot,
                        100.0 * pp[1] / pp[0], 100.0 * pp[2] / pp[0], 100.0 * pp[3] / pp[0], 100.0 * pp[4] / pp[0], 100.0 * pp[5] / pp[0]);
             }
+        }
+    }
+    if (doprof) {
+        for (i = 0; i < 2; i++) {
+            static uint64_t per[8192];
+            uint64_t tot = 0;
+            int k, order[8192], no = 0;
+            memset(per, 0, sizeof(per));
+            for (k = 0; k < ROMPROF_SIZE; k++) {
+                uint32_t a = 0x02000000 + (k << PROF_SHIFT);
+                int lo = 0, hi = nsyms - 1, best = -1;
+                if (!romprof[i][k]) continue;
+                while (lo <= hi) { int mid = (lo + hi) / 2; if (syms[mid].addr <= a) { best = mid; lo = mid + 1; } else hi = mid - 1; }
+                if (best >= 0) per[best] += romprof[i][k];
+                tot += romprof[i][k];
+            }
+            for (k = 0; k < nsyms; k++) if (per[k]) order[no++] = k;
+            for (k = 0; k < no; k++) {
+                int j;
+                for (j = k + 1; j < no; j++) if (per[order[j]] > per[order[k]]) { int t2 = order[k]; order[k] = order[j]; order[j] = t2; }
+            }
+            if (tot) printf("cpu%d ROM code profile (%llu cycles, %.1f%% of the run)\n", i, (unsigned long long)tot, 100.0 * tot / (seconds * SH2_HZ));
+            for (k = 0; k < no && k < 16; k++)
+                printf("  %-22s %5.1f%%\n", syms[order[k]].name, 100.0 * per[order[k]] / tot);
         }
     }
     if (hotn) {

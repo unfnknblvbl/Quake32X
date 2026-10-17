@@ -11,6 +11,8 @@ Layout is described by the header (see LVL_* in src/level.h).
 import math
 import struct
 import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ----------------------------------------------------------------- pak / wad
 
@@ -554,7 +556,7 @@ def main():
     hdr_fields = ['planes', 'nodes', 'leafs', 'marksurf', 'faces', 'fverts', 'verts',
                   'texinfo', 'textures', 'light', 'vis', 'leaffrags', 'clipnodes',
                   'palette', 'colormap', 'conchars', 'skytex', 'facesph', 'nodeparent',
-                  'backtile']
+                  'backtile', 'ents', 'models', 'anorms', 'sounds']
     HDR_SIZE = 4 + 4 + len(hdr_fields) * 8 + 64
     blob.data += b'\0' * HDR_SIZE
     offs = {}
@@ -720,6 +722,14 @@ def main():
     offs['backtile'] = blob.add(bt[8:8 + 64 * 64])
     counts['backtile'] = 64 * 64
 
+    # game data: entities, flat-coloured models, sounds (tools/mkents.py)
+    import mkents
+    from anorms import ANORMS
+    gd = mkents.add_game_data(blob, pak, pal, ents, models, fx, E, sys.modules[__name__], ANORMS)
+    for k, (o, n) in gd.items():
+        offs[k] = o
+        counts[k] = n
+
     # sky: use the back (right) half of the sky texture, 128x128, as a single layer
     sky = None
     for t in textures:
@@ -750,7 +760,7 @@ def main():
         h += struct.pack(E + 'ii', offs[k], counts[k])
     h += struct.pack(E + '3ii', fx(spawn[0]), fx(spawn[1]), fx(spawn[2]), int(yaw))
     h += struct.pack(E + 'hhh', models[0][9], models[0][10], len(nodes))
-    h += struct.pack(E + 'hh', nworld, models[0][13])
+    h += struct.pack(E + 'hhh', nworld, models[0][13], models[0][11])
     h = h.ljust(HDR_SIZE, b'\0')
     blob.data[0:HDR_SIZE] = h
     blob.align(16)

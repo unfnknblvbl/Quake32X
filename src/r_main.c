@@ -1,5 +1,5 @@
 /* Quake 32X renderer: view setup, PVS, BSP walk, clipping, span coverage */
-#include "r_local.h"
+#include "g_local.h"
 
 level_t lvl;
 view_t  view;
@@ -289,9 +289,9 @@ static void walk_bsp(rcpu_t *rc)
 
 static void draw_range(rcpu_t *rc, int a, int b)
 {
-    int i;
+    int i, depth = scene.zused;
     for (i = a; i < b; i++) {
-        const frec_t *fr = &rc->frec[i];
+        frec_t *fr = &rc->frec[i];
         const lfgeom_t *g = &lvl.fgeom[fr->fi];
         rc->faces++;
         rc->spancount += fr->nspan;
@@ -303,6 +303,8 @@ static void draw_range(rcpu_t *rc, int a, int b)
             draw_spans_turb(rc, fr, 0);
         else
             draw_spans_tex(rc, fr);
+        if (depth)
+            r_depth_spans(rc, fr, g->flags);
     }
 }
 
@@ -418,6 +420,7 @@ void r_render(rcpu_t *rc, int row0, int row1)
     rc->nwfrec = 0;
     rc->nwspans = 0;
     rc->fb_ready = 0;
+    r_depth_clear(rc);
 
     walk_bsp(rc);
     ci = 0;
@@ -430,4 +433,6 @@ void r_render(rcpu_t *rc, int row0, int row1)
     fill_gaps(rc);
     if (rc->nwfrec)
         draw_liquids(rc);
+    if (scene.ndraw || scene.nparts)
+        r_draw_models(rc);
 }

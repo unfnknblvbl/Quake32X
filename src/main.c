@@ -1,5 +1,8 @@
 /* Quake 32X - main loops for the two SH-2s */
-#include "game.h"
+#include "g_local.h"
+#ifdef DEMO_BOT
+#include "bot.h"
+#endif
 
 extern const uint8_t level_data[];
 extern uint8_t _bss_end[];  /* linker symbol __bss_end */
@@ -21,7 +24,7 @@ static int win_x, win_y;            /* view window origin (rendered pixels) */
 #define FREE_TOP     0x06040000      /* stacks are in on-chip RAM */
 #define CCR_PURGE    0x19            /* purge, keep two-way mode */
 #else
-#define FREE_TOP     0x0603E000      /* two 4 KB stacks above this */
+#define FREE_TOP     0x0603D000      /* slave 4 KB and master 8 KB stacks above */
 #define CCR_PURGE    0x11            /* purge, 4-way cache */
 #endif
 
@@ -114,11 +117,12 @@ static void apply_settings(void)
         r_arena(&rcpu[0], arena_base, arena_each, schash[0], cfg.mesh);
         r_arena(&rcpu[1], arena_base + arena_each, arena_each, schash[1], cfg.mesh);
     }
-    if (view.vw != vs->w || view.vh != vs->h) {
+    int vh = vs->h < SCREENH - SBAR_H ? vs->h : SCREENH - SBAR_H;   /* above the status bar */
+    if (view.vw != vs->w || view.vh != vh) {
         view.vw = vs->w;
-        view.vh = vs->h;
+        view.vh = vh;
         win_x = (SCREENW - vs->w) >> 1;
-        win_y = (SCREENH - vs->h) >> 1;
+        win_y = (SCREENH - SBAR_H - vh) >> 1;
         r_fb = r_screen + win_y * SCREENW + win_x;
         border_dirty = 2;
     }
@@ -127,7 +131,7 @@ static void apply_settings(void)
 /* input, game ticks, view and PVS for the next frame */
 static uint32_t frame_now;
 
-#ifdef DEMO
+#ifdef DEMO_CAMERA
 #include "demo.h"
 /* demo playback: the camera follows a planned route, and pause-menu macros
    fire at given camera ticks (the camera holds still while a macro runs) */
@@ -175,14 +179,16 @@ static uint16_t demo_update(uint32_t now, int ticks, uint16_t pad_pressed)
 }
 #endif
 
-static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
+/* input and game ticks. The master runs this right after drawing its own
+ * rows, while the slave is still drawing: nothing here touches what the
+ * slave reads (view, the scene, the PVS), only game state, and the row
+ * split rebalances to give the slave more of the picture. */
+static void update_input(uint32_t *last_tick, uint16_t *oldpad)
 {
     uint32_t now = time_now();
     int ticks = now - *last_tick;
     volatile uint16_t *latch = UNCACHED(&pad_latch);
     uint16_t pad = PAD, seen, pressed;
-    fixed_t eye[3];
-    int leaf;
 
     seen = *latch | pad_poll;
     *latch = 0;
@@ -193,8 +199,12 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
     *oldpad = pad;
     *last_tick = now;
     frame_now = now;
-#ifdef DEMO
+#ifdef DEMO_CAMERA
     pressed = demo_update(now, ticks, pressed);    /* real time: the camera keeps pace */
+#endif
+#ifdef DEMO_BOT
+    pressed = 0;
+    bot_menu(now, &pressed);
 #endif
     if (ticks > 6) ticks = 6;
     if (hint_time > 0) {
@@ -208,15 +218,33 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
     }
     if (menu_active)
         menu_input(pressed);
-#ifndef DEMO
-    else
-        while (ticks-- > 0)
-            game_tick(pad);
+    else {
+#ifdef DEMO_BOT
+        uint16_t held = 0;
 #endif
-    apply_settings();
+        while (ticks-- > 0) {
+#ifdef DEMO_BOT
+            bot_tick(&held, &pressed);
+            pad = held;
+#endif
+#ifndef DEMO_CAMERA
+            if (!g_level_done)
+                game_tick(pad);
+#endif
+            g_tick(pad, pressed);
+            pressed = 0;
+        }
+    }
+}
 
+/* the next frame's view, PVS and scene: only once the slave is done */
+static void update_view(int *viewleaf)
+{
+    fixed_t eye[3];
+    int leaf;
+    apply_settings();
     game_eye(eye);
-    view.time = now;
+    view.time = frame_now;
     r_setup_view(eye, player.yaw, player.pitch);
     leaf = r_pointleaf(eye);
     view.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
@@ -225,6 +253,33 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
         r_markleaves(leaf);
         *viewleaf = leaf;
     }
+    g_build_scene();
+    snd_update();
+}
+
+/* the status bar, redrawn only when its text changes (per framebuffer) */
+static void sbar_draw(int force)
+{
+    static char last[2][48];
+    static uint8_t lasthi[2] = { 0xFF, 0xFF };
+    char buf[48];
+    int fb = (MARS_VDP_FBCTL & MARS_VDP_FS) ^ 1;     /* the one being drawn */
+    int hi = g_hud_text(buf), i;
+    if (!force && lasthi[fb] == hi) {
+        for (i = 0; buf[i] == last[fb][i]; i++)
+            if (!buf[i])
+                return;
+    }
+    for (i = 0; i < 47 && buf[i]; i++)
+        last[fb][i] = buf[i];
+    last[fb][i] = 0;
+    lasthi[fb] = hi;
+    {
+        volatile uint32_t *d = (volatile uint32_t *)(r_screen + (SCREENH - SBAR_H) * SCREENW);
+        for (i = 0; i < SBAR_H * SCREENW / 2; i++)
+            d[i] = 0;
+    }
+    draw_text(4, SCREENH - SBAR_H + 1, buf, hi);
 }
 
 void pri_main(void)
@@ -251,13 +306,23 @@ void pri_main(void)
     }
 
     game_init();
+    scene.zbuf = zbuf_mem;
+#ifdef DEMO_CAMERA
+    cfg.monsters = 0;                   /* the camera route has no player to fight */
+#endif
+    g_init();
+    snd_init();
+#ifdef DEMO_BOT
+    bot_init();
+#endif
     view.cachegen = 1;
     view.mipbias = 0;
     apply_settings();
     r_poll_hook = poll_pad;
     last_tick = fps_tick = time_now();
     view.flip_fs = MARS_VDP_FBCTL & MARS_VDP_FS;
-    update_frame(&last_tick, &viewleaf, &oldpad);
+    update_input(&last_tick, &oldpad);
+    update_view(&viewleaf);
 
     for (;;) {
         int32_t mspin = 0, sspin;
@@ -275,6 +340,7 @@ void pri_main(void)
         if (++tag == 0) tag = 1;
         SLAVE_GO = tag;
         r_render(&rcpu[0], 0, split);
+        update_input(&last_tick, &oldpad);  /* game ticks while the slave draws */
         /* the border is static: redraw it only into framebuffers that had a
            menu or hint drawn over it (or after a size change), so after the
            overlay goes away both framebuffers get one clean redraw */
@@ -307,6 +373,9 @@ void pri_main(void)
             }
         }
 
+        sbar_draw(border_dirty > 0 || menu_active);
+        if (g_level_done)
+            intermission_draw(ps.kills, ps.total_monsters, hw_div(g_level_ticks, 60));
         if (menu_active)
             menu_draw();
         if (cfg.showfps)
@@ -328,13 +397,14 @@ void pri_main(void)
         fs = MARS_VDP_FBCTL & MARS_VDP_FS;
         MARS_VDP_FBCTL = fs ^ 1;
         view.flip_fs = fs ^ 1;
-        update_frame(&last_tick, &viewleaf, &oldpad);
+        update_view(&viewleaf);
     }
 }
 
 void sec_main(void)
 {
     uint16_t last = 0;
+    int sound_on = 0;
     r_oram_init();
 #ifdef PROFILE
     *(volatile uint8_t *)0xFFFFFE10 = 0;    /* TIER: no FRT interrupts */
@@ -347,6 +417,10 @@ void sec_main(void)
         while ((tag = SLAVE_GO) == last) ;
         last = tag;
         SH2_CCR = CCR_PURGE;    /* purge: see the master's fresh view/PVS data */
+        if (!sound_on) {
+            snd_init_slave();   /* the master has loaded everything by now */
+            sound_on = 1;
+        }
         r_render(&rcpu[1], view.split, view.vh);
         SLAVE_DONE = tag;
         while (MASTER_DONE != tag)

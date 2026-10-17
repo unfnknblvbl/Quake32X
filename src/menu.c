@@ -6,7 +6,11 @@
 int menu_active;
 static int cursor;
 
-enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_FPS, M_MOVE, M_RESUME, M_NUM };
+enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_MONSTERS, M_FPS, M_MOVE, M_RESUME, M_NUM };
+
+static const char *const cap_names[NUM_MONSTER_CAPS] = {
+    "OFF", "1", "2", "3", "4", "6", "8", "UNLIMITED"
+};
 
 static inline volatile uint8_t *fb8(void) { return (volatile uint8_t *)r_screen; }
 
@@ -71,10 +75,7 @@ void hud_draw(int x, int y, int fps10, int split)
     p = fmt_int(p, fps10 - hw_div(fps10, 10) * 10);
     p = cat(p, " FPS");
     draw_text(x + 4, y + 2, buf, 0);
-    p = buf;
-    p = cat(p, "split ");
-    fmt_int(p, split);
-    draw_text(x + 4, y + 11, buf, 0);
+    (void)split;
 }
 
 /* Quake's backtile around a reduced view window; each framebuffer word
@@ -101,9 +102,9 @@ void border_draw(int x0, int y0, int w, int h)
 /* controls reminder shown at start-up */
 void hint_draw(void)
 {
-    shade_box(0, 86, 320, 112);
-    draw_text(8, 88, "D-PAD: MOVE/TURN   A+D-PAD: STRAFE/LOOK", 0);
-    draw_text(8, 99, "B: JUMP   START: MENU (TEXTURES, LIGHT)", 0);
+    shade_box(0, SCREENH - SBAR_H - 25, 320, SCREENH - SBAR_H);
+    draw_text(8, SCREENH - SBAR_H - 23, "D-PAD: MOVE/TURN  A+D-PAD: STRAFE/LOOK", 0);
+    draw_text(8, SCREENH - SBAR_H - 12, "C:FIRE  B:JUMP  A+C:WEAPON  START:MENU", 0);
 }
 
 void menu_input(int pressed)
@@ -133,6 +134,12 @@ void menu_input(int pressed)
         if (cfg.far < 0) cfg.far = 0;
         if (cfg.far >= NUM_FAR) cfg.far = NUM_FAR - 1;
         break;
+    case M_MONSTERS:
+        if (delta == 2) delta = cfg.monsters == NUM_MONSTER_CAPS - 1 ? -(NUM_MONSTER_CAPS - 1) : 1;
+        cfg.monsters += delta;
+        if (cfg.monsters < 0) cfg.monsters = 0;
+        if (cfg.monsters >= NUM_MONSTER_CAPS) cfg.monsters = NUM_MONSTER_CAPS - 1;
+        break;
     case M_FPS:  cfg.showfps ^= 1; break;
     case M_MOVE: cfg.fly ^= 1; break;
     case M_RESUME:
@@ -144,16 +151,17 @@ void menu_input(int pressed)
 void menu_draw(void)
 {
     static const char *const names[M_NUM] = {
-        "Textures", "Lighting", "Water", "Draw distance", "Screen size", "Show FPS",
-        "Movement", "Resume"
+        "Textures", "Lighting", "Water", "Draw distance", "Screen size",
+        "Monsters at once", "Show FPS", "Movement", "Resume"
     };
     char buf[48], *p;
-    int i, y0 = 10;
+    int i, y0 = 4;
 
-    shade_box(24, y0 - 6, 296, y0 + 100);
+    /* rows 0..101: clear of the status bar */
+    shade_box(16, 0, 304, SCREENH - SBAR_H);
     draw_text(160 - 6 * 8 / 2, y0, "PAUSED", 1);
     for (i = 0; i < M_NUM; i++) {
-        int y = y0 + 14 + i * 9;
+        int y = y0 + 12 + i * 8;
         p = buf;
         switch (i) {
         case M_TEXTURES: p = cat(p, cfg.textures ? "ON" : "OFF (flat)"); break;
@@ -181,15 +189,38 @@ void menu_draw(void)
             else p = fmt_int(p, far_levels[cfg.far]);
             break;
         }
+        case M_MONSTERS: p = cat(p, cap_names[cfg.monsters]); break;
         case M_FPS:  p = cat(p, cfg.showfps ? "ON" : "OFF"); break;
         case M_MOVE: p = cat(p, cfg.fly ? "FLY" : "WALK"); break;
         default: break;
         }
         *p = 0;
         if (i == cursor)
-            draw_char(48, y, 13);   /* arrow glyph */
-        draw_text(60, y, names[i], i == cursor);
-        draw_text(172, y, buf, 0);
+            draw_char(28, y, 13);   /* arrow glyph */
+        draw_text(40, y, names[i], i == cursor);
+        draw_text(184, y, buf, 0);
     }
-    draw_text(40, y0 + 14 + M_NUM * 9 + 3, "Up/Down select  Left/Right set", 0);
+    draw_text(40, y0 + 12 + M_NUM * 8 + 3, "Up/Down select  Left/Right set", 0);
+}
+
+/* end of the level: Quake's intermission figures */
+void intermission_draw(int kills, int total, int secs)
+{
+    char buf[32], *p;
+    int y = 30;
+    shade_box(64, y - 6, 256, y + 50);
+    draw_text(160 - 13 * 4, y, "LEVEL COMPLETE", 1);
+    p = cat(buf, "Time   ");
+    p = fmt_int(p, hw_div(secs, 60));
+    *p++ = ':';
+    secs -= hw_div(secs, 60) * 60;
+    *p++ = '0' + hw_div(secs, 10);
+    *p++ = '0' + secs - hw_div(secs, 10) * 10;
+    *p = 0;
+    draw_text(96, y + 16, buf, 0);
+    p = cat(buf, "Kills  ");
+    p = fmt_int(p, kills);
+    *p++ = '/';
+    fmt_int(p, total);
+    draw_text(96, y + 26, buf, 0);
 }

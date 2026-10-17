@@ -178,7 +178,7 @@
         .else
         /* compatible build: stacks in SDRAM, normal 4-way cache */
         .equ    pri_stack, 0x06040000
-        .equ    sec_stack, 0x0603F000
+        .equ    sec_stack, 0x0603E000      /* 4 KB; the master has 8 KB above it */
         .equ    CCR_ON, 0x11
         .endif
 
@@ -191,6 +191,7 @@ pri_vbr:
         .long   pri_err
         .endr
         .long   pri_irq, pri_irq, pri_irq, pri_irq, pri_irq, pri_irq, pri_irq, pri_irq
+        .long   pri_err                 /* 72: DMA channel 1 (unused here) */
 
 sec_vbr:
         .long   sec_start, sec_stack, sec_start, sec_stack
@@ -200,6 +201,7 @@ sec_vbr:
         .long   sec_err
         .endr
         .long   sec_irq, sec_irq, sec_irq, sec_irq, sec_irq, sec_irq, sec_irq, sec_irq
+        .long   _snd_dma_isr            /* 72: DMA channel 1 end: the sound mixer */
 
 !-----------------------------------------------------------------------
 ! Master SH-2

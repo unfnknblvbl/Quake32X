@@ -9,6 +9,7 @@ enum {
     LVL_VERTS, LVL_TEXINFO, LVL_TEXTURES, LVL_LIGHT, LVL_VIS, LVL_LEAFFRAGS,
     LVL_CLIPNODES, LVL_PALETTE, LVL_COLORMAP, LVL_CONCHARS, LVL_SKYTEX,
     LVL_FACESPH, LVL_NODEPARENT, LVL_BACKTILE,
+    LVL_ENTS, LVL_MODELS, LVL_ANORMS, LVL_SOUNDS,
     LVL_NUMLUMPS
 };
 
@@ -18,7 +19,7 @@ typedef struct {
     struct { int32_t ofs, count; } lump[LVL_NUMLUMPS];
     fixed_t spawn[3];
     int32_t yaw;
-    int16_t headnode, headnode1, numnodes, nworld, visleafs;
+    int16_t headnode, headnode1, numnodes, nworld, visleafs, headnode2;
 } lheader_t;
 
 typedef struct { fixed_t n[3]; fixed_t dist; } lplane_t;            /* 16 */

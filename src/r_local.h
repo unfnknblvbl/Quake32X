@@ -221,6 +221,14 @@ void geom_raster(rcpu_t *rc);
 
 /* r_setup.c */
 int  face_setup(rcpu_t *rc, frec_t *fr);
+void face_zsetup(frec_t *fr);
+
+/* r_model.c: models, particles and the view weapon, with depth only in
+   the per-row intervals around them */
+void r_depth_clear(rcpu_t *rc);
+void r_depth_spans(rcpu_t *rc, frec_t *fr, int flags);
+void r_draw_models(rcpu_t *rc);
+extern uint16_t zbuf_mem[];
 
 /* r_surf.c */
 void sc_init(rcpu_t *rc, uint8_t *mem, int size, surfcache_t **hash);

@@ -78,9 +78,11 @@ void r_span_init(void)
 
 static inline uint16_t dbl(int c) { return (uint16_t)((c << 8) | c); }
 
+/* low clamp 1/256 texel, as in span_asm.s: interpolation between two
+ * clamped ends can round a little below the lower one */
 static inline fixed_t clampf(fixed_t v, fixed_t hi)
 {
-    return v < 0 ? 0 : v > hi ? hi : v;
+    return v < 0x100 ? 0x100 : v > hi ? hi : v;
 }
 
 #ifndef HOST
@@ -150,6 +152,12 @@ void draw_spans_tex(rcpu_t *rc, const frec_t *fr)
             }
             count -= n;
             do {
+#ifdef HOST_CHECK
+                if ((t >> 16) * sw + (s >> 16) < 0 || (t >> 16) * sw + (s >> 16) >= sw * sc->height) {
+                    extern void host_bad_texel(const frec_t *fr, int s, int t, int x, int y);
+                    host_bad_texel(fr, s, t, x, y);
+                }
+#endif
                 *dst++ = dbl(src[(t >> 16) * sw + (s >> 16)]);
                 s += sstep;
                 t += tstep;

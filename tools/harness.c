@@ -98,8 +98,17 @@ static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch)
             memcpy(frame_copy + y * w, (const uint8_t *)data + y * pitch, w * 2);
     }
 }
-static void audio_cb(int16_t l, int16_t r) { (void)l; (void)r; }
-static size_t audio_batch_cb(const int16_t *d, size_t n) { (void)d; return n; }
+static FILE *audio_out;             /* AUDIO=file.raw: s16le stereo at the core's rate */
+static void audio_cb(int16_t l, int16_t r)
+{
+    int16_t s[2] = { l, r };
+    if (audio_out) fwrite(s, 2, 2, audio_out);
+}
+static size_t audio_batch_cb(const int16_t *d, size_t n)
+{
+    if (audio_out) fwrite(d, 4, n, audio_out);
+    return n;
+}
 static void input_poll_cb(void) {}
 
 static int16_t input_state_cb(unsigned port, unsigned device, unsigned index, unsigned id)
@@ -225,6 +234,7 @@ int main(int argc, char **argv)
         retro_set_environment(env_cb);
         retro_init();
         retro_set_video_refresh(video_cb);
+        if (getenv("AUDIO")) audio_out = fopen(getenv("AUDIO"), "wb");
         retro_set_audio_sample(audio_cb);
         retro_set_audio_sample_batch(audio_batch_cb);
         retro_set_input_poll(input_poll_cb);

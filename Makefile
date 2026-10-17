@@ -25,7 +25,7 @@ build/m68k.bin: src-md/md.s | build
 	$(MDLD) -Ttext=0x880800 -o build/md.elf build/md.o
 	$(MDOBJCOPY) -O binary build/md.elf $@
 
-data/$(MAP).lvl: tools/mkmap.py data/pak0.pak
+data/$(MAP).lvl: tools/mkmap.py tools/mkents.py tools/anorms.py data/pak0.pak
 	python3 tools/mkmap.py data/pak0.pak maps/$(MAP).bsp $@
 
 build/level.lvl: data/$(MAP).lvl | build
@@ -41,14 +41,25 @@ endif
 
 # DEMO=1: scripted walkthrough (camera route + menu macros) instead of the pad
 ifeq ($(DEMO),1)
-CFLAGS += -DDEMO
+CFLAGS += -DDEMO -DDEMO_CAMERA
 OBJS   += build/demo_data.o
 endif
 # DEMO=bench: the demo route at fixed settings (set with the pad), no macros
 ifeq ($(DEMO),bench)
-CFLAGS += -DDEMO -DDEMO_BENCH
+CFLAGS += -DDEMO -DDEMO_CAMERA -DDEMO_BENCH
 OBJS   += build/demo_data.o
 endif
+# DEMO=bot: a bot plays the level to the exit (the walkthrough video)
+ifeq ($(DEMO),bot)
+CFLAGS += -DDEMO -DDEMO_BOT
+OBJS   += build/bot_data.o
+endif
+
+build/bot_data.c: tools/make_bot.py data/$(MAP)_botroute.json | build
+	python3 tools/make_bot.py data/$(MAP)_botroute.json $@
+
+build/bot_data.o: build/bot_data.c src/bot.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 build/demo_data.c: tools/make_demo.py data/$(MAP)_route.json | build
 	python3 tools/make_demo.py data/$(MAP)_route.json $@

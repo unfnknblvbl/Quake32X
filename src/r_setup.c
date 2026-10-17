@@ -9,6 +9,31 @@
     case 1: __VA_ARGS__; /* fall through */ \
     default: break; } } while (0)
 
+/* only the 1/z gradients (flat shading, for the depth intervals) */
+void face_zsetup(frec_t *fr)
+{
+    const lface_t *f = fr->f;
+    const lplane_t *pl = &lvl.planes[f->plane];
+    fixed_t n[3], dcam;
+    int32_t distinv, A, B, zref;
+    if (f->flags & FF_PLANEBACK) {
+        n[0] = -pl->n[0]; n[1] = -pl->n[1]; n[2] = -pl->n[2];
+        dcam = pl->dist - dot16(pl->n, view.org);
+    } else {
+        n[0] = pl->n[0]; n[1] = pl->n[1]; n[2] = pl->n[2];
+        dcam = dot16(pl->n, view.org) - pl->dist;
+    }
+    if (dcam < 0x2000) dcam = 0x2000;
+    distinv = hw_div64((int64_t)1 << 43, dcam);
+    A = dot16(n, view.r80s5);
+    B = dot16(n, view.d80s5);
+    fr->dzidx = -(int32_t)(((int64_t)A * distinv) >> 31);
+    fr->dzidy = -(int32_t)(((int64_t)B * distinv) >> 31);
+    zref = hw_div64((int64_t)1 << 48, fr->refv.z);
+    fr->zi0 = (int32_t)((uint32_t)zref + (uint32_t)fixmul(fr->dzidx, 0x8000 - fr->refsx)
+                        + (uint32_t)fixmul(fr->dzidy, 0x8000 - fr->refsy));
+}
+
 /* returns 0 if the surface cache could not make room without evicting a
  * surface still needed by this batch (the caller draws and retries) */
 int face_setup(rcpu_t *rc, frec_t *fr)

@@ -4,8 +4,11 @@ A from-scratch Quake world renderer for a **stock 32X** (two 23 MHz SH-2s,
 256 KB SDRAM, no extra cartridge hardware), running the first level of Quake
 (E1M1) converted from the shareware `pak0.pak`.
 
-It's a rendering tech demo. You can walk or fly around E1M1, but there are no
-monsters, items, weapons, sound or game logic yet.
+E1M1 is playable from the start to the exit: its grunts and dogs, the shotgun
+and super shotgun, items, a status bar and Quake's own sounds through the 32X
+PWM. A pause-menu setting, **Monsters at once**, caps how many monsters are in
+the world at a time (2 by default); the rest wait in a queue and teleport in,
+with Quake's teleport sound and particle burst, as others die.
 
 ## Controls (3- or 6-button pad)
 
@@ -15,8 +18,9 @@ monsters, items, weapons, sound or game logic yet.
 | D-pad left / right | turn |
 | A + left / right | strafe |
 | A + up / down | look up / down |
+| C | fire (walk mode) / fly down (fly mode) |
+| A + C | next weapon |
 | B | jump (walk mode) / fly up (fly mode) |
-| C | fly down (fly mode) |
 | START | pause menu |
 
 The controls are shown at the bottom of the screen for the first few seconds.
@@ -43,11 +47,27 @@ scene keeps rendering behind the menu, so every change shows up immediately.
   The view keeps its 90 degree field of view and shrinks, and Quake's border
   tile fills the rest of the screen. Fewer pixels to draw makes textured mode
   faster.
-* **Show FPS**: frame rate, plus the screen row where the second CPU takes over.
+* **Monsters at once**: Off, 1, 2, 3, 4, 6, 8 or Unlimited (default 2).
+  With a cap, the nearest queued monster whose spot you could see teleports
+  in whenever a slot is free. Monsters left far behind (out of sight and over
+  800 units away for 6 seconds) go back to the queue. Unlimited spawns them
+  all at the start, as Quake does.
+* **Show FPS**: the frame rate.
 * **Movement**: walk (gravity, steps, collision with the player hull) or fly.
 * **Resume**
 
 ## Performance
+
+With monsters, the walkthrough demo (`make DEMO=bot`, flat shaded, full
+screen) averages 14.4 fps in the cycle model with 2 monsters at once, and 9
+frames in 10 fall between 8.8 and 27.5 fps. On the same route with monsters
+off it averages 19.8 fps. Drawing the models costs 15 to 25% of each CPU in a
+fight; the sound mixer takes about 5% of the slave.
+
+The game systems cost about 12% even with no monsters (the weapon, items,
+status bar, sound and game logic, plus less SDRAM for the surface cache). The
+route table below is from before they were added; the same route now
+averages 27.6 fps flat and 16.1 fps textured at full screen.
 
 The best single measure is the average over the whole walkthrough route
 (the start, the lift, the courtyard, the pool and the channel), from
@@ -107,8 +127,15 @@ big-endian, fixed-point blob that stays in cartridge ROM. It produces:
 * the palette, colormap, font and sky texture.
 
 Doors and platforms are clipped into the world leaves as static fragments.
-Doors are placed in their open position, because there is no game logic yet
-to move them.
+Doors are placed in their open position, because nothing moves them yet, and
+they are not solid.
+
+`tools/mkents.py` adds the game data to the same blob: an 18-byte record per
+entity the game knows (monsters, items, the exit), the models, Quake's 162
+vertex normals, and the sounds as 8-bit 11 kHz samples. A model keeps its
+vertex frames (4 bytes per vertex), its triangles, one colour per triangle
+per skin (the average of the skin texels it covers) and a bounding box per
+frame. Item boxes (`maps/b_*.bsp`) become one-frame models.
 
 At runtime, each frame goes like this:
 
@@ -155,6 +182,28 @@ At runtime, each frame goes like this:
 5. **Vertical blank.** Both CPUs begin the next frame's walk and geometry
    while the hardware is still waiting for vertical blank, and block only at
    their first framebuffer write.
+
+The game (`src/g_*.c`, `src/r_model.c`, `src/snd.c`):
+
+* **Game logic** runs on the master at 60 Hz, right after it draws its own
+  rows and while the slave is still drawing, so the row split hands the
+  slave more of the picture. Monsters follow id's QuakeC (soldier.qc,
+  dog.qc, ai.qc, fight.qc) and Quake's step-and-chase movement against the
+  clip hulls, thinking ten times a second. The cold code (`g_main`,
+  `g_monst`) runs from cartridge ROM; collision stays in SDRAM.
+* **Depth only where it is needed.** There is no z-buffer. Each frame the
+  master reserves a per-row interval of depth around every model on screen,
+  up to 6,144 samples. World spans write 1/z there as they are drawn, and
+  models and particles test against it. A model too close to fit is drawn
+  back to front without it, like the view weapon.
+* **Models** are flat shaded in both texture modes, one colour per triangle,
+  lit the way Quake lights models. Each triangle takes the depth of its
+  nearest vertex; that is close enough at this resolution.
+* **Sound.** The slave's DMA channel 1 feeds the PWM: when a buffer of 256
+  stereo samples has played, the DMA interrupt restarts it on the other
+  buffer and mixes the next one (6 channels of Quake's 11 kHz samples, each
+  doubled to 22 kHz). The master queues new sounds; Quake's distance fade and
+  stereo panning are worked out when a sound starts.
 
 Other tricks:
 
@@ -208,13 +257,34 @@ To record it, run `sh2sim ... -video frames.rgb -vlog frames.log`. This
 writes every displayed frame as raw 320x224 RGB24, and logs the demo phase
 and FPS for each vblank, which is useful for captions.
 
+## Monster walkthrough demo
+
+```
+make DEMO=bot   # a bot plays E1M1 to the exit
+tools/record_bot.sh OUT 68   # record it in the cycle model, with sound
+```
+
+The bot opens the pause menu, switches to flat shading, shows the Monsters
+at once setting, then plays through the pad like a person: the D-pad to turn
+and walk, C to fire. Its route to the exit through the north hall comes from
+`tools/plan_route.py`, centred in corridors by `tools/refine_route.py`
+(`data/e1m1_botroute.json`). It stops to shoot anything in sight within
+shotgun range and fires only when Quake's vertical auto-aim would hit. It
+picks up backpacks, and shells or health when low. Its only help is taking a
+quarter of the damage. `tools/hostgame.sh` builds the same game for a PC (with
+sanitizers), for quick runs.
+
 ## Tools
 
 * `tools/mkmap.py`: BSP to level blob converter (`--le` writes a
   little-endian copy for the host build).
 * `tools/sh2sim.c`: the dual SH-2 and 32X bus timing model, with
-  per-function profiles (`-prof`), hottest instructions (`-hot N`), scripted
-  pad input, screenshots and video capture (`-video`).
+  per-function profiles (`-prof`, including code run from ROM), hottest
+  instructions (`-hot N`), scripted pad input, screenshots, video capture
+  (`-video`), PWM sound with the SH-2 DMA and its interrupt (`-audio`), and
+  memory watches in the per-vblank log (`-watch symbol n`).
+* `tools/mkents.py`: entities, models and sounds for the level blob;
+  `--header src/g_ids.h` writes the matching ids.
 * `tools/plan_route.py` and `tools/make_demo.py`: the route planner and the
   demo script generator.
 * `tools/bench_route.sh`, `tools/bench_view.sh` and `tools/bench_modes.sh`:
@@ -222,15 +292,20 @@ and FPS for each vblank, which is useful for captions.
   view (built with `-DSTART_POS=x,y,z,yaw,pitch`), or at the spawn point and
   down the first hall.
 * `tools/harness.c`: a headless libretro front end for PicoDrive, used for
-  screenshots and scripted input.
+  screenshots, scripted input and sound capture (`AUDIO=file.raw`).
 * `host/`: the same renderer built for a PC, with sanitizers and per-frame
   statistics (`tools/hosttest.sh`).
 
 ## Not done yet / ideas
 
-* Monsters, items, weapons and game logic (for example by porting
-  MG24Quake's translated QuakeC), moving doors and platforms, and sound
-  through PWM.
+* Moving, solid doors and platforms. E1M1's lift is drawn but not solid, so
+  you drop down the shaft.
+* Firing the nailgun, and the other weapons; textured monster skins; damage
+  from slime, lava and falls; E1M2 and the change of level.
+* Simpler grunt and dog models (about half the triangles) would make fights
+  faster.
+* `FAST=1` gives each CPU a 2 KB on-chip stack, which is too small for the
+  game's collision code; it hasn't been tried with the game.
 * Assembly versions of geometry stages B and C, which are the biggest
   remaining cost.
 * Hardware verification. Everything has been checked in PicoDrive (dynarec

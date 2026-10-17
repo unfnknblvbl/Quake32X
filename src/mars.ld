@@ -1,8 +1,9 @@
 /* Quake 32X memory map
  *   ROM   0x02000000  4 MB  (SH-2 view of the cartridge while RV=0)
  *   SDRAM 0x06000000  256 KB
- * The whole SH-2 program (code + data) runs from SDRAM: the 32X boot ROM
- * copies it there using the Mars header. Level data stays in ROM.
+ * The SH-2 program (code + data) runs from SDRAM: the 32X boot ROM copies
+ * it there using the Mars header. Level data and the game logic (cold
+ * code: g_main, g_monst, bot) stay in ROM.
  */
 OUTPUT_FORMAT("elf32-sh")
 OUTPUT_ARCH(sh)
@@ -29,8 +30,8 @@ SECTIONS
         __sdram_start = .;
         KEEP(*(.vectors))
         *(.text.hot .text.hot.*)
-        *(.text .text.*)
-        *(.rodata .rodata.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .text.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *bot.o) .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
         . = ALIGN(16);
@@ -39,7 +40,17 @@ SECTIONS
 
     __sdram_size = __sdram_end - __sdram_start;
 
-    .romdata (__sdram_load + __sdram_size) : AT(__sdram_load + __sdram_size)
+    /* game logic: cold code, run from cartridge ROM through the cache */
+    .romtext (__sdram_load + __sdram_size) : AT(__sdram_load + __sdram_size)
+    {
+        *(.romtext .romtext.*)
+        *g_main.o(.text .text.* .rodata .rodata.*)
+        *g_monst.o(.text .text.* .rodata .rodata.*)
+        *bot.o(.text .text.* .rodata .rodata.*)
+        . = ALIGN(16);
+    } > rom
+
+    .romdata : AT(ADDR(.romdata))
     {
         KEEP(*(.romdata))
         . = ALIGN(16);

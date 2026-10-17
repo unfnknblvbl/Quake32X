@@ -1,8 +1,8 @@
 /* Player movement: walking with gravity, or flying, against the player clip hull */
-#include "game.h"
+#include "g_local.h"
 
 player_t player;
-settings_t cfg = { 1, 1, 6, 1, 0, 0, 0 };
+settings_t cfg = { 1, 1, 6, 1, 0, 0, 0, 2, 0 };
 
 const int far_levels[NUM_FAR] = { 256, 384, 512, 768, 1024, 1536, 2048, 3072, 8192 };
 /* screen sizes, like Quake's viewsize: the same view, smaller (10:7 window) */
@@ -68,6 +68,8 @@ static int try_move(fixed_t dx, fixed_t dy)
     fixed_t nx = p[0] + dx, ny = p[1] + dy;
     int k;
 
+    if (!cfg.fly && g_box_blocked(nx, ny, p[2]))
+        return 0;                       /* a monster is in the way */
     if (!is_solid(nx, ny, p[2])) {
         p[0] = nx; p[1] = ny;
         return 1;
@@ -116,6 +118,8 @@ static int move_vert(fixed_t dz)
 
 void game_tick(int buttons)
 {
+    if (ps.dead)
+        buttons = 0;                    /* dead: fall, but no control */
     fixed_t cy = fcos(player.yaw), sy = fsin(player.yaw);
     fixed_t speed = cfg.fly ? FLYSPEED : RUNSPEED;
     fixed_t fwd = 0, side = 0;
@@ -165,5 +169,11 @@ void game_eye(fixed_t eye[3])
 {
     eye[0] = player.pos[0];
     eye[1] = player.pos[1];
-    eye[2] = player.pos[2] + VIEWHEIGHT;
+    eye[2] = player.pos[2] + (ps.dead ? (8 << 16) : VIEWHEIGHT);   /* dead: on the floor */
+}
+
+/* back to the start of the level */
+void game_respawn(void)
+{
+    game_init();
 }
