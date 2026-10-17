@@ -18,6 +18,22 @@ void sc_init(rcpu_t *rc, uint8_t *mem, int size, surfcache_t **hash)
     sc_flush(rc);
 }
 
+/* split a CPU's memory between the see-through liquid buffers (when used)
+ * and its surface cache */
+void r_arena(rcpu_t *rc, uint8_t *mem, int size, surfcache_t **hash, int mesh)
+{
+    rc->wfrec = NULL;
+    rc->wspans = NULL;
+    if (mesh) {
+        int need = (MAXWFREC * sizeof(frec_t) + MAXWSPANS * sizeof(span_t) + 15) & ~15;
+        rc->wfrec = (frec_t *)mem;
+        rc->wspans = (span_t *)(mem + MAXWFREC * sizeof(frec_t));
+        mem += need;
+        size -= need;
+    }
+    sc_init(rc, mem, size, hash);
+}
+
 void sc_flush(rcpu_t *rc)
 {
     surfcache_t *s = (surfcache_t *)rc->sc_base;

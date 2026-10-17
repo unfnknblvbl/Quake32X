@@ -8,7 +8,7 @@ enum {
     LVL_PLANES, LVL_NODES, LVL_LEAFS, LVL_MARKSURF, LVL_FACES, LVL_FVERTS,
     LVL_VERTS, LVL_TEXINFO, LVL_TEXTURES, LVL_LIGHT, LVL_VIS, LVL_LEAFFRAGS,
     LVL_CLIPNODES, LVL_PALETTE, LVL_COLORMAP, LVL_CONCHARS, LVL_SKYTEX,
-    LVL_FACESPH, LVL_NODEPARENT,
+    LVL_FACESPH, LVL_NODEPARENT, LVL_BACKTILE,
     LVL_NUMLUMPS
 };
 
@@ -52,6 +52,8 @@ typedef struct {
 #define FF_SKY       2
 #define FF_TURB      4
 #define FF_DARK      8
+#define FF_LIQUID   16                   /* water, slime, lava (not teleporters) */
+#define FF_UNDERWATER 32                 /* only visible from inside a liquid */
 
 typedef struct {
     uint16_t firstvert;
@@ -109,6 +111,7 @@ typedef struct {
     const uint8_t     *skytex;
     const lfgeom_t    *fgeom;
     const int16_t     *nodeparent;
+    const uint8_t     *backtile;         /* 64x64 border tile */
     int numfaces, numleafs, numnodes, numplanes, visleafs;
 } level_t;
 

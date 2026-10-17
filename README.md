@@ -32,14 +32,38 @@ scene keeps rendering behind the menu, so every change shows up immediately.
   shading, with one colour per polygon taken from the texture's average and the
   face's average light.
 * **Lighting**: Quake lightmaps on or off. This applies in both texture modes.
+* **Water**: SOLID (as in Quake) or SEE-THROUGH. See-through draws water and
+  slime as a fine mesh over whatever is below the surface, in both texture
+  modes. Every other screen pixel is the liquid, alternating on each row, so
+  on a TV it blends like transparency.
 * **Draw distance**: a slider with 256, 384, 512, 768, 1024, 1536, 2048, 3072
   and max. Geometry beyond the far plane is not drawn, and the far area shows
   as black.
+* **Screen size**: 100% down to 50% in 10% steps, like PC Quake's viewsize.
+  The view keeps its 90 degree field of view and shrinks, and Quake's border
+  tile fills the rest of the screen. Fewer pixels to draw makes textured mode
+  faster.
 * **Show FPS**: frame rate, plus the screen row where the second CPU takes over.
 * **Movement**: walk (gravity, steps, collision with the player hull) or fly.
 * **Resume**
 
 ## Performance
+
+The best single measure is the average over the whole walkthrough route
+(the start, the lift, the courtyard, the pool and the channel), from
+`tools/bench_route.sh`. This is the real-hardware estimate:
+
+| Screen size | 100% | 90% | 80% | 70% | 60% | 50% |
+|---|---|---|---|---|---|---|
+| Textured + lit, fps | 18.4 | 20.0 | 21.7 | 23.8 | 25.8 | 27.5 |
+| Flat shaded + lit, fps | 31.2 | 32.0 | 32.7 | 33.9 | 34.8 | 35.7 |
+
+With see-through water the route averages 15.3 fps textured and 27.6 fps
+flat at full screen, because everything under the water has to be drawn as
+well. Textured at 70% with see-through water averages 20.7 fps. Views with
+no liquid in sight cost nothing extra. Flat shading gains less from a
+smaller screen than texturing does, because it is limited by geometry
+rather than by pixels.
 
 There are two sets of numbers, because emulators are optimistic about 32X
 timing:
@@ -49,6 +73,9 @@ timing:
   ROM wait states, the framebuffer FIFO, cache misses and both CPUs contending
   for the bus, using figures from the 32X hardware manual.
 * **PicoDrive.** This emulator charges no memory wait states.
+
+The table below is from before the screen size and water options. Those
+options cost about 1.5% when they are off.
 
 | Setting (spawn view / walking down the hall) | Real HW estimate | PicoDrive |
 |---|---|---|
@@ -110,6 +137,21 @@ At runtime, each frame goes like this:
 4. **Spans.** A hand-written SH-2 assembly loop does perspective-correct
    mapping, recomputed every 16 pixels. The 1/z divide for the next span runs
    on the hardware divider while the current span is drawn.
+   * **Liquids** use Quake's per-pixel warp on the 64x64 base texture (Quake
+     never mipmaps them either). Water and slime textures are copied from
+     cartridge ROM to SDRAM at start-up, because the warp reads them in a
+     scattered order and ROM cache refills cost about 6 times as much.
+   * **See-through liquids** are rasterized against the coverage lists
+     without filling them, so the geometry under the surface is drawn as
+     usual. The liquid's spans are kept, then drawn after everything else
+     (back to front), writing one byte of each two-pixel framebuffer word.
+     Faces that are only visible from inside a liquid are drawn one mip level
+     coarser while you look at them from above, since half their pixels are
+     covered. The buffers for this come out of the surface cache memory only
+     while the option is on.
+   * **Screen size** changes the projection (focal length = half the view
+     width) and offsets the framebuffer pointer. The border tile is drawn
+     only into framebuffers that had the menu over it.
 5. **Vertical blank.** Both CPUs begin the next frame's walk and geometry
    while the hardware is still waiting for vertical blank, and block only at
    their first framebuffer write.
@@ -151,8 +193,13 @@ E1M1 is part of the Quake shareware episode, so the ROM can be shared.
 make DEMO=1     # plays a scripted walkthrough instead of reading the pad
 ```
 
-The demo build follows a camera route through the level and toggles the
-pause-menu settings by itself, the same way a player would. The route comes
+The demo build follows a camera route through the level and works the pause
+menu by itself, the same way a player would. It tries the screen sizes on the
+way to the pool, then sweeps the same view over the pool four times
+(textured and flat shaded, each with solid and see-through water). Then it
+wades in, dips under the surface to look up through it, and follows the
+channel. `make DEMO=bench` follows the same route with no menu changes, for
+`tools/bench_route.sh`. The route comes
 from `tools/plan_route.py`, a path planner that walks the player clip hull.
 `tools/make_demo.py` then turns that route into a 60 Hz camera table plus
 timed menu button presses. The route is stored in `data/e1m1_route.json`.
@@ -170,6 +217,10 @@ and FPS for each vblank, which is useful for captions.
   pad input, screenshots and video capture (`-video`).
 * `tools/plan_route.py` and `tools/make_demo.py`: the route planner and the
   demo script generator.
+* `tools/bench_route.sh`, `tools/bench_view.sh` and `tools/bench_modes.sh`:
+  real-hardware estimates averaged over the walkthrough route, from one fixed
+  view (built with `-DSTART_POS=x,y,z,yaw,pitch`), or at the spawn point and
+  down the first hall.
 * `tools/harness.c`: a headless libretro front end for PicoDrive, used for
   screenshots and scripted input.
 * `host/`: the same renderer built for a PC, with sanitizers and per-frame

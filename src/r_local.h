@@ -20,9 +20,10 @@
 #define HASHSIZE    1024
 #define MAX_SURFSIZE (128 * 128)
 
-#define CENTERX     (SCREENW / 2)
-#define CENTERY     (SCREENH / 2)
-#define PROJ        80          /* 90 degree horizontal field of view */
+#define PROJ        80          /* full-size focal length: 90 degree field of view */
+
+#define MAXWFREC    32          /* deferred see-through liquid faces per CPU */
+#define MAXWSPANS   512         /* ... and their spans */
 
 #define ANGLE_90    16384
 #define ANGLE_180   32768
@@ -31,7 +32,7 @@
 typedef struct {
     fixed_t org[3];
     fixed_t fwd[3], right[3], down[3];
-    int32_t r80s5[3], d80s5[3];      /* right/down * 2^37 / PROJ */
+    int32_t r80s5[3], d80s5[3];      /* right/down (16.16) * 2^20 / proj */
     int16_t r16[3][3];               /* rows: right, down, fwd in 2.14 */
     int32_t camr[3];                 /* org . row, in 15.17 */
     fixed_t far;
@@ -42,6 +43,16 @@ typedef struct {
     int     time;                    /* 60 Hz ticks, for sky and water */
     int     mipbias;
     int     flip_fs;                 /* FS value to wait for before drawing */
+    /* view window (screen size option): the 3D view is vw x vh rendered
+       pixels inside the 160x112 screen, with the same 90 degree field of view */
+    int     vw, vh, proj;            /* proj = vw / 2, the focal length */
+    int64_t proj40;                  /* proj << 40, dividend for the projection */
+    fixed_t vw16;                    /* vw << 16 */
+    fixed_t cx16, cy16;              /* projection centre */
+    int32_t k24;                     /* 2^24 / proj */
+    fixed_t mipscale;                /* PROJ / proj: distance scale for mip choice */
+    int     mesh;                    /* draw liquids as a see-through mesh */
+    int     underwater;              /* the eye is inside a liquid */
 } view_t;
 
 typedef struct { fixed_t x, y, z; } vec3_t;
@@ -122,7 +133,14 @@ typedef struct {
     int      nspans;
     span_t   spans[MAXSPANS];
     uint16_t batch;
-    int      fb_ready;               /* the frame we draw into is no longer displayed */
+    int      fb_ready;
+
+    /* see-through liquids: rasterized against the coverage without filling
+       it, then drawn as a mesh after everything else. The buffers are taken
+       from the surface cache memory only while the option is on (NULL off). */
+    int      nwfrec, nwspans;
+    frec_t  *wfrec;                  /* [MAXWFREC] */
+    span_t  *wspans;                 /* [MAXWSPANS] */               /* the frame we draw into is no longer displayed */
 
     vec3_t   clipa[MAXCLIPVERTS], clipb[MAXCLIPVERTS];
 
@@ -145,7 +163,8 @@ extern view_t view;
 extern uint8_t vis_leafs[], vis_nodes[], vis_faces[];
 extern uint8_t colormap[64 * 256];
 extern gaprow_t gaps[SCREENH];
-extern volatile uint16_t *r_fb;      /* 160 words per rendered row */
+extern volatile uint16_t *r_fb;      /* view window origin; 160 words per rendered row */
+extern volatile uint16_t *r_screen;  /* top left of the screen */
 extern const fixed_t sintab[1024];
 
 static inline fixed_t fsin(int a) { return sintab[(a >> 6) & 1023]; }
@@ -205,6 +224,7 @@ int  face_setup(rcpu_t *rc, frec_t *fr);
 
 /* r_surf.c */
 void sc_init(rcpu_t *rc, uint8_t *mem, int size, surfcache_t **hash);
+void r_arena(rcpu_t *rc, uint8_t *mem, int size, surfcache_t **hash, int mesh);
 void sc_flush(rcpu_t *rc);
 surfcache_t *sc_get(rcpu_t *rc, int faceidx, int mip);
 
@@ -214,7 +234,8 @@ void r_oram_init(void);
 void draw_spans_tex(rcpu_t *rc, const frec_t *fr);
 void draw_spans_flat(rcpu_t *rc, const frec_t *fr, int color);
 void draw_spans_sky(rcpu_t *rc, const frec_t *fr);
-void draw_spans_turb(rcpu_t *rc, const frec_t *fr);
+void draw_spans_turb(rcpu_t *rc, const frec_t *fr, int mesh);
+void draw_spans_flat_mesh(rcpu_t *rc, const frec_t *fr, int color);
 void fill_gaps(rcpu_t *rc);
 void draw_batch(rcpu_t *rc);
 extern void (*r_poll_hook)(void);   /* called by the master between batches */

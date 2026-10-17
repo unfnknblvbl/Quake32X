@@ -1,7 +1,6 @@
 /* Per-face shading setup: 1/z, s/z, t/z screen gradients and the surface */
 #include "r_local.h"
 
-#define K24_80 209715   /* 2^24 / PROJ */
 
 /* shift right by the mip level without a variable shift (no barrel shifter) */
 #define MIPSHIFT(mip, ...) do { switch (mip) { \
@@ -28,10 +27,16 @@ int face_setup(rcpu_t *rc, frec_t *fr)
 
     /* mip level from the nearest point, raised until the surface fits */
     {
-        fixed_t z = fr->zmin;
+        fixed_t z = fixmul(fr->zmin, view.mipscale);    /* as seen at full size */
         if (view.mipbias) z >>= 1;
         mip = z < (96 << 16) ? 0 : z < (192 << 16) ? 1 : z < (384 << 16) ? 2 : 3;
-        if (!(f->flags & FF_TURB)) {
+        if (f->flags & FF_TURB)
+            mip = 0;                    /* liquids: base texture only, as in Quake */
+        else {
+            /* seen through the see-through water mesh: half its pixels are
+               covered, so a coarser surface does (and fits the cache) */
+            if ((f->flags & FF_UNDERWATER) && !view.underwater && mip < 3)
+                mip++;
             int area = f->ext[0] * f->ext[1], lim = MAX_SURFSIZE;
             MIPSHIFT(mip, lim <<= 2);
             while (mip < 3 && area > lim) {
@@ -56,8 +61,8 @@ int face_setup(rcpu_t *rc, frec_t *fr)
     distinv = hw_div64((int64_t)1 << 43, dcam);
     A = dot16(n, view.r80s5);
     B = dot16(n, view.d80s5);
-    dzidx = -(int32_t)(((int64_t)A * distinv) >> 32);
-    dzidy = -(int32_t)(((int64_t)B * distinv) >> 32);
+    dzidx = -(int32_t)(((int64_t)A * distinv) >> 31);
+    dzidy = -(int32_t)(((int64_t)B * distinv) >> 31);
     fr->dzidx = dzidx;
     fr->dzidy = dzidy;
     zref = hw_div64((int64_t)1 << 48, fr->refv.z);
@@ -66,15 +71,15 @@ int face_setup(rcpu_t *rc, frec_t *fr)
         fixed_t vr = dot16(ti->s, view.right), vd = dot16(ti->s, view.down), vf = dot16(ti->s, view.fwd);
         sc = dot16(ti->s, view.org) + ti->s[3] - (f->tmins[0] << 16);
         sref = sc + fixmul(vr, fr->refv.x) + fixmul(vd, fr->refv.y) + fixmul(vf, fr->refv.z);
-        sr = fixmul(vr, K24_80);
-        sd = fixmul(vd, K24_80);
+        sr = fixmul(vr, view.k24);
+        sd = fixmul(vd, view.k24);
     }
     {
         fixed_t vr = dot16(ti->t, view.right), vd = dot16(ti->t, view.down), vf = dot16(ti->t, view.fwd);
         tc = dot16(ti->t, view.org) + ti->t[3] - (f->tmins[1] << 16);
         tref = tc + fixmul(vr, fr->refv.x) + fixmul(vd, fr->refv.y) + fixmul(vf, fr->refv.z);
-        tr = fixmul(vr, K24_80);
-        td = fixmul(vd, K24_80);
+        tr = fixmul(vr, view.k24);
+        td = fixmul(vd, view.k24);
     }
     sc >>= 8; tc >>= 8; sref >>= 8; tref >>= 8;
     MIPSHIFT(mip, sr >>= 1; sd >>= 1; sc >>= 1; sref >>= 1; tr >>= 1; td >>= 1; tc >>= 1; tref >>= 1);

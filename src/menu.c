@@ -6,9 +6,9 @@
 int menu_active;
 static int cursor;
 
-enum { M_TEXTURES, M_LIGHTING, M_FAR, M_FPS, M_MOVE, M_RESUME, M_NUM };
+enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_FPS, M_MOVE, M_RESUME, M_NUM };
 
-static inline volatile uint8_t *fb8(void) { return (volatile uint8_t *)r_fb; }
+static inline volatile uint8_t *fb8(void) { return (volatile uint8_t *)r_screen; }
 
 static void draw_char(int x, int y, int c)
 {
@@ -63,18 +63,39 @@ static char *cat(char *p, const char *s)
     return p;
 }
 
-void hud_draw(int fps10, int split)
+void hud_draw(int x, int y, int fps10, int split)
 {
     char buf[32], *p = buf;
     p = fmt_int(p, hw_div(fps10, 10));
     *p++ = '.';
     p = fmt_int(p, fps10 - hw_div(fps10, 10) * 10);
     p = cat(p, " FPS");
-    draw_text(4, 2, buf, 0);
+    draw_text(x + 4, y + 2, buf, 0);
     p = buf;
     p = cat(p, "split ");
     fmt_int(p, split);
-    draw_text(4, 11, buf, 0);
+    draw_text(x + 4, y + 11, buf, 0);
+}
+
+/* Quake's backtile around a reduced view window; each framebuffer word
+ * holds two tile pixels, so the tile keeps its full horizontal detail */
+void border_draw(int x0, int y0, int w, int h)
+{
+    int r, c;
+    for (r = 0; r < SCREENH; r++) {
+        volatile uint16_t *d = r_screen + r * SCREENW;
+        const uint8_t *row = lvl.backtile + ((r << 1) & 63) * 64;
+        int inside = r >= y0 && r < y0 + h;
+        for (c = 0; c < SCREENW; c++) {
+            int tx;
+            if (inside && c == x0) {
+                c = x0 + w - 1;
+                continue;
+            }
+            tx = (c << 1) & 63;
+            d[c] = (uint16_t)((row[tx] << 8) | row[tx + 1]);
+        }
+    }
 }
 
 /* controls reminder shown at start-up */
@@ -98,6 +119,14 @@ void menu_input(int pressed)
     switch (cursor) {
     case M_TEXTURES: cfg.textures ^= 1; break;
     case M_LIGHTING: cfg.lighting ^= 1; break;
+    case M_WATER:    cfg.mesh ^= 1; break;
+    case M_SIZE:
+        /* the slider grows to the right: right = bigger screen */
+        if (delta == 2) delta = 1;
+        cfg.size -= delta;
+        if (cfg.size < 0) cfg.size = 0;
+        if (cfg.size >= NUM_SIZES) cfg.size = NUM_SIZES - 1;
+        break;
     case M_FAR:
         if (delta == 2) delta = 1;
         cfg.far += delta;
@@ -115,19 +144,32 @@ void menu_input(int pressed)
 void menu_draw(void)
 {
     static const char *const names[M_NUM] = {
-        "Textures", "Lighting", "Draw distance", "Show FPS", "Movement", "Resume"
+        "Textures", "Lighting", "Water", "Draw distance", "Screen size", "Show FPS",
+        "Movement", "Resume"
     };
     char buf[48], *p;
-    int i, y0 = 20;
+    int i, y0 = 10;
 
-    shade_box(24, y0 - 6, 296, y0 + 8 * 11);
+    shade_box(24, y0 - 6, 296, y0 + 100);
     draw_text(160 - 6 * 8 / 2, y0, "PAUSED", 1);
     for (i = 0; i < M_NUM; i++) {
-        int y = y0 + 16 + i * 10;
+        int y = y0 + 14 + i * 9;
         p = buf;
         switch (i) {
         case M_TEXTURES: p = cat(p, cfg.textures ? "ON" : "OFF (flat)"); break;
         case M_LIGHTING: p = cat(p, cfg.lighting ? "ON" : "OFF"); break;
+        case M_WATER:    p = cat(p, cfg.mesh ? "SEE-THROUGH" : "SOLID"); break;
+        case M_SIZE: {
+            int k;
+            *p++ = '[';
+            for (k = 0; k < NUM_SIZES - 1; k++)
+                *p++ = k < NUM_SIZES - 1 - cfg.size ? '=' : '-';
+            *p++ = ']';
+            *p++ = ' ';
+            p = fmt_int(p, view_sizes[cfg.size].pct);
+            *p++ = '%';
+            break;
+        }
         case M_FAR: {
             int k;
             *p++ = '[';
@@ -149,5 +191,5 @@ void menu_draw(void)
         draw_text(60, y, names[i], i == cursor);
         draw_text(172, y, buf, 0);
     }
-    draw_text(40, y0 + 16 + M_NUM * 10 + 4, "Up/Down select  Left/Right set", 0);
+    draw_text(40, y0 + 14 + M_NUM * 9 + 3, "Up/Down select  Left/Right set", 0);
 }

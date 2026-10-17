@@ -280,6 +280,10 @@ def main():
             fl |= 2
         if name.startswith('*'):
             fl |= 4
+            # the liquid drawer assumes Quake's 64x64 turbulent textures
+            assert (t['w'], t['h']) == (64, 64), name
+            if not name.startswith('*tele'):
+                fl |= 16    # liquid: may be drawn as a see-through mesh
         return fl
 
     # ------------------------------------------------ face records
@@ -353,10 +357,24 @@ def main():
     face_recs = []   # dict per output face
     face_vlists = []
 
+    # faces that are only ever seen from inside a liquid (pool floors and
+    # walls below the surface): the renderer draws them a mip level coarser
+    # when they are seen through see-through water from above
+    in_liquid, in_air = set(), set()
+    for lf in leafs:
+        marks = m['marksurfaces'][lf[8]:lf[8] + lf[9]]
+        if lf[0] in (-3, -4, -5):
+            in_liquid.update(marks)
+        elif lf[0] == CONTENTS_EMPTY:
+            in_air.update(marks)
+    underwater = in_liquid - in_air
+
     def add_face(fi, pts, orig_pts, side_flag, allow_empty=False):
         f = bspfaces[fi]
         ti = f[4]
         flags = tex_flags(ti) | side_flag
+        if fi in underwater and not (flags & 4):
+            flags |= 32
         tmins, ext = face_extents(orig_pts, ti)
         lofs, avgL = build_light(fi, orig_pts)
         if lofs < 0 and not (flags & 6):
@@ -535,7 +553,8 @@ def main():
     blob = Blob()
     hdr_fields = ['planes', 'nodes', 'leafs', 'marksurf', 'faces', 'fverts', 'verts',
                   'texinfo', 'textures', 'light', 'vis', 'leaffrags', 'clipnodes',
-                  'palette', 'colormap', 'conchars', 'skytex', 'facesph', 'nodeparent']
+                  'palette', 'colormap', 'conchars', 'skytex', 'facesph', 'nodeparent',
+                  'backtile']
     HDR_SIZE = 4 + 4 + len(hdr_fields) * 8 + 64
     blob.data += b'\0' * HDR_SIZE
     offs = {}
@@ -693,6 +712,13 @@ def main():
     counts['colormap'] = len(colormap)
     offs['conchars'] = blob.add(conchars[:128 * 128])
     counts['conchars'] = 128 * 128
+
+    # Quake's border tile for reduced screen sizes (a 64x64 qpic in gfx.wad)
+    bt = wad['backtile']
+    bw, bh = struct.unpack('<ii', bt[:8])
+    assert (bw, bh) == (64, 64)
+    offs['backtile'] = blob.add(bt[8:8 + 64 * 64])
+    counts['backtile'] = 64 * 64
 
     # sky: use the back (right) half of the sky texture, 128x128, as a single layer
     sky = None

@@ -41,6 +41,7 @@ void level_init(const void *blob)
     lvl.skytex    = L(LVL_SKYTEX);
     lvl.fgeom     = (const lfgeom_t *)L(LVL_FACESPH);
     lvl.nodeparent = (const int16_t *)L(LVL_NODEPARENT);
+    lvl.backtile  = L(LVL_BACKTILE);
 #undef L
     lvl.numfaces  = h->lump[LVL_FACES].count;
     lvl.numleafs  = h->lump[LVL_LEAFS].count;
@@ -62,6 +63,18 @@ void r_setup_view(fixed_t org[3], int yaw, int pitch)
     fixed_t sp = fsin(pitch), cp = fcos(pitch);
     int i;
 
+    int32_t k32;
+
+    if (view.vw <= 0) { view.vw = SCREENW; view.vh = SCREENH; }
+    view.proj = view.vw >> 1;
+    view.proj40 = (int64_t)view.proj << 40;
+    view.vw16 = view.vw << 16;
+    view.cx16 = view.vw << 15;
+    view.cy16 = view.vh << 15;
+    view.k24 = hw_div(1 << 24, view.proj);
+    view.mipscale = hw_div(PROJ << 16, view.proj);
+    k32 = hw_div64((int64_t)1 << 32, view.proj);       /* 2^32 / proj */
+
     view.org[0] = org[0]; view.org[1] = org[1]; view.org[2] = org[2];
     view.yaw = yaw; view.pitch = pitch;
     view.fwd[0] = fixmul(cy, cp);
@@ -74,9 +87,10 @@ void r_setup_view(fixed_t org[3], int yaw, int pitch)
     view.down[1] = -fixmul(sy, sp);
     view.down[2] = -cp;
     for (i = 0; i < 3; i++) {
-        /* x * 2^21 / 80 == x * (2^32 / 40) >> 12, without a 64-bit divide */
-        view.r80s5[i] = (int32_t)(((int64_t)view.right[i] * 107374182) >> 12);
-        view.d80s5[i] = (int32_t)(((int64_t)view.down[i] * 107374182) >> 12);
+        /* x * 2^20 / proj == x * (2^32 / proj) >> 12, without a 64-bit divide
+           (2^20, not 2^21: the smallest window, proj 40, would overflow) */
+        view.r80s5[i] = (int32_t)(((int64_t)view.right[i] * k32) >> 12);
+        view.d80s5[i] = (int32_t)(((int64_t)view.down[i] * k32) >> 12);
         view.r16[0][i] = view.right[i] >> 2;
         view.r16[1][i] = view.down[i] >> 2;
         view.r16[2][i] = view.fwd[i] >> 2;
@@ -286,7 +300,7 @@ static void draw_range(rcpu_t *rc, int a, int b)
         else if (g->flags & FF_SKY)
             draw_spans_sky(rc, fr);
         else if (g->flags & FF_TURB)
-            draw_spans_turb(rc, fr);
+            draw_spans_turb(rc, fr, 0);
         else
             draw_spans_tex(rc, fr);
     }
@@ -313,6 +327,27 @@ void draw_batch(rcpu_t *rc)
     }
     draw_range(rc, start, n);
     rc->nfrec = 0;
+    rc->nspans = 0;
+}
+
+/* see-through liquids, after everything behind them is drawn: back to
+ * front, as a mesh that leaves every other pixel of what is behind */
+static void draw_liquids(rcpu_t *rc)
+{
+    int i;
+    memcpy(rc->spans, rc->wspans, rc->nwspans * sizeof(span_t));
+    for (i = rc->nwfrec - 1; i >= 0; i--) {
+        frec_t *fr = &rc->wfrec[i];
+        const lfgeom_t *g = &lvl.fgeom[fr->fi];
+        rc->faces++;
+        rc->spancount += fr->nspan;
+        if (!view.textures) {
+            draw_spans_flat_mesh(rc, fr, view.lighting ? g->lit : g->unlit);
+        } else {
+            face_setup(rc, fr);         /* liquids need no surface cache */
+            draw_spans_turb(rc, fr, 1);
+        }
+    }
     rc->nspans = 0;
 }
 
@@ -358,8 +393,8 @@ void r_render(rcpu_t *rc, int row0, int row1)
     if (row0 >= row1)
         return;
 
-    rc->ky0 = ((row0 - CENTERY) << 16) / PROJ;
-    rc->ky1 = ((row1 - CENTERY) << 16) / PROJ;
+    rc->ky0 = hw_div((row0 << 16) - view.cy16, view.proj);
+    rc->ky1 = hw_div((row1 << 16) - view.cy16, view.proj);
     set_plane(rc, CP_NEAR, 0, 0, 0x10000, NEAR_Z);
     set_plane(rc, CP_FAR, 0, 0, -0x10000, -view.far);
     set_plane(rc, CP_LEFT, 0x10000, 0, 0x10000, 0);
@@ -375,11 +410,13 @@ void r_render(rcpu_t *rc, int row0, int row1)
     for (r = row0; r < row1; r++) {
         gaps[r].n = 1;
         gaps[r].g[0] = 0;
-        gaps[r].g[1] = SCREENW;
+        gaps[r].g[1] = view.vw;
     }
     rc->rowsleft = row1 - row0;
     rc->nfrec = 0;
     rc->nspans = 0;
+    rc->nwfrec = 0;
+    rc->nwspans = 0;
     rc->fb_ready = 0;
 
     walk_bsp(rc);
@@ -391,4 +428,6 @@ void r_render(rcpu_t *rc, int row0, int row1)
     }
     wait_fb(rc);
     fill_gaps(rc);
+    if (rc->nwfrec)
+        draw_liquids(rc);
 }

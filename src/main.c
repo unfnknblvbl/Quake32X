@@ -6,6 +6,11 @@ extern uint8_t _bss_end[];  /* linker symbol __bss_end */
 volatile uint32_t vblank_count;
 volatile uint16_t pad_latch;     /* OR of every pad sample, set by the VBlank IRQ */
 volatile uint16_t *r_fb;
+volatile uint16_t *r_screen = (volatile uint16_t *)0x24000200;
+static int border_dirty;            /* framebuffers whose border needs redrawing */
+static uint8_t *arena_base;         /* per-CPU memory: liquid buffers + surface cache */
+static int arena_each, arena_mesh = -1;
+static int win_x, win_y;            /* view window origin (rendered pixels) */
 
 #define SLAVE_GO     MARS_SYS_COMM4
 #define SLAVE_DONE   MARS_SYS_COMM6
@@ -96,11 +101,27 @@ static void init_video(void)
 
 static void apply_settings(void)
 {
+    const viewsize_t *vs = &view_sizes[cfg.size];
     if (view.lighting != cfg.lighting)
         view.cachegen++;
     view.textures = cfg.textures;
     view.lighting = cfg.lighting;
     view.far = far_levels[cfg.far] << 16;
+    view.mesh = cfg.mesh;
+    if (arena_mesh != cfg.mesh) {
+        /* both CPUs are idle here; the slave purges its cache before the next frame */
+        arena_mesh = cfg.mesh;
+        r_arena(&rcpu[0], arena_base, arena_each, schash[0], cfg.mesh);
+        r_arena(&rcpu[1], arena_base + arena_each, arena_each, schash[1], cfg.mesh);
+    }
+    if (view.vw != vs->w || view.vh != vs->h) {
+        view.vw = vs->w;
+        view.vh = vs->h;
+        win_x = (SCREENW - vs->w) >> 1;
+        win_y = (SCREENH - vs->h) >> 1;
+        r_fb = r_screen + win_y * SCREENW + win_x;
+        border_dirty = 2;
+    }
 }
 
 /* input, game ticks, view and PVS for the next frame */
@@ -113,10 +134,18 @@ static uint32_t frame_now;
 static int demo_tick, demo_macro, demo_step;
 static uint32_t demo_t0;
 
-static uint16_t demo_update(uint32_t now, int ticks)
+static uint16_t demo_update(uint32_t now, int ticks, uint16_t pad_pressed)
 {
+#ifdef DEMO_BENCH
+    /* benchmark: the route without the menu macros; the pad works the menu */
+    static const demo_macro_t none = { -1, 0 };
+    const demo_macro_t *m = &none;
+    uint16_t pressed = pad_pressed;
+#else
     const demo_macro_t *m = &demo_macros[demo_macro];
     uint16_t pressed = 0;
+    (void)pad_pressed;
+#endif
     if (m->tick >= 0 && demo_tick >= m->tick) {
         if (!demo_t0) demo_t0 = now ? now : 1;
         while (m->steps[demo_step].dt >= 0 && (int)(now - demo_t0) >= m->steps[demo_step].dt)
@@ -165,7 +194,7 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
     *last_tick = now;
     frame_now = now;
 #ifdef DEMO
-    pressed = demo_update(now, ticks);     /* real time: the camera keeps pace */
+    pressed = demo_update(now, ticks, pressed);    /* real time: the camera keeps pace */
 #endif
     if (ticks > 6) ticks = 6;
     if (hint_time > 0) {
@@ -190,6 +219,8 @@ static void update_frame(uint32_t *last_tick, int *viewleaf, uint16_t *oldpad)
     view.time = now;
     r_setup_view(eye, player.yaw, player.pitch);
     leaf = r_pointleaf(eye);
+    view.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
+                      && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;     /* water, slime, lava */
     if (leaf != *viewleaf) {
         r_markleaves(leaf);
         *viewleaf = leaf;
@@ -201,13 +232,13 @@ void pri_main(void)
     uint32_t last_tick, fps_tick;
     int frames = 0, fps10 = 0, viewleaf = -1;
     uint16_t oldpad = 0, tag = 0;
-    int split = SCREENH / 2;
+    int split = SCREENH / 2, splith = SCREENH;
 
     level_init(level_data);
     r_init();
     r_span_init();
     r_oram_init();
-    r_fb = (volatile uint16_t *)0x24000200;
+    r_fb = r_screen;
     init_video();
 
     {
@@ -215,8 +246,8 @@ void pri_main(void)
         int each = ((FREE_TOP - base) / 2) & ~15;
         rcpu[0].cpu = 0;
         rcpu[1].cpu = 1;
-        sc_init(&rcpu[0], (uint8_t *)base, each, schash[0]);
-        sc_init(&rcpu[1], (uint8_t *)(base + each), each, schash[1]);
+        arena_base = (uint8_t *)base;
+        arena_each = each;
     }
 
     game_init();
@@ -236,10 +267,24 @@ void pri_main(void)
         /* render: master does rows [0,split), slave [split,SCREENH). Both
            start with geometry and wait for the previous flip only when they
            first write to the framebuffer. */
+        if (splith != view.vh) {            /* screen size changed: keep the ratio */
+            split = hw_div(split * view.vh, splith);
+            splith = view.vh;
+        }
         view.split = split;
         if (++tag == 0) tag = 1;
         SLAVE_GO = tag;
         r_render(&rcpu[0], 0, split);
+        /* the border is static: redraw it only into framebuffers that had a
+           menu or hint drawn over it (or after a size change), so after the
+           overlay goes away both framebuffers get one clean redraw */
+        if (border_dirty) {
+            if (view.vw < SCREENW)
+                border_draw(win_x, win_y, view.vw, view.vh);
+            border_dirty--;
+        }
+        if (menu_active || hint_time > 0)
+            border_dirty = 2;
         while (SLAVE_DONE != tag)
             mspin++;
         MARS_SYS_COMM8 = tag;
@@ -255,14 +300,17 @@ void pri_main(void)
             if (step > 3) step = 3;
             if (step < -3) step = -3;
             split += step;
-            if (split < 16) split = 16;
-            if (split > SCREENH - 16) split = SCREENH - 16;
+            {
+                int lim = view.vh >> 3;
+                if (split < lim) split = lim;
+                if (split > view.vh - lim) split = view.vh - lim;
+            }
         }
 
         if (menu_active)
             menu_draw();
         if (cfg.showfps)
-            hud_draw(fps10, split);
+            hud_draw(menu_active ? 0 : win_x * 2, menu_active ? 0 : win_y, fps10, split);  /* clear of the menu */
         if (hint_time > 0 && !menu_active)
             hint_draw();
 
@@ -299,7 +347,7 @@ void sec_main(void)
         while ((tag = SLAVE_GO) == last) ;
         last = tag;
         SH2_CCR = CCR_PURGE;    /* purge: see the master's fresh view/PVS data */
-        r_render(&rcpu[1], view.split, SCREENH);
+        r_render(&rcpu[1], view.split, view.vh);
         SLAVE_DONE = tag;
         while (MASTER_DONE != tag)
             spin++;

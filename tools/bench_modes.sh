@@ -1,19 +1,28 @@
 #!/bin/sh
-# Real-hardware estimates for each menu setting (sh2sim). Menu input is
-# scripted: START opens the pause menu, D moves down, L/R change a value.
+# Real-hardware estimates for each menu setting (sh2sim): the spawn view, then
+# walking down the first hall. Menu input is scripted, one press every 12
+# vblanks (longer than a frame, so no press is lost): S opens/closes the pause
+# menu, D moves down, L/R change a value. Menu order: Textures, Lighting,
+# Water, Draw distance, Screen size, Show FPS, Movement, Resume.
 cd "$(dirname "$0")/.."
 /opt/toolchains/sega/bin/sh-elf-nm -n build/q32x.elf > build/syms.txt
-run() {   # name, extra -pad args...
-    name=$1; shift
-    out=$(./hostbuild/sh2sim quake32x.32x build/syms.txt 9 "$@" -pad 300 540 U)
-    still=$(echo "$out" | grep "t=  4s" | awk '{print $4}')
-    walk=$(echo "$out" | grep "t=  9s" | awk '{print $4}')
-    avg=$(echo "$out" | grep "^frames" | sed 's/.*avg frame \([0-9.]*\) ms/\1/')
-    printf "%-34s start view %5s fps   walking %5s fps   (avg frame %s ms)\n" "$name" "$still" "$walk" "$avg"
+press() {   # keys -> -pad args, from vblank 60
+    t=60; for k in $(echo "$1" | sed 's/./& /g'); do
+        printf -- "-pad %d %d %s " $t $((t + 3)) $k; t=$((t + 12)); done
 }
-run "textured + lit (default)"
-run "textured, lighting off"      -pad 100 101 S -pad 110 111 D -pad 120 121 R -pad 130 131 S
-run "flat shaded + lit"           -pad 100 101 S -pad 110 111 R -pad 130 131 S
-run "flat shaded, lighting off"   -pad 100 101 S -pad 110 111 R -pad 120 121 D -pad 130 131 R -pad 140 141 S
-run "textured, draw distance 512" -pad 100 101 S -pad 110 111 D -pad 120 121 D -pad 130 131 L -pad 140 141 L -pad 150 151 L -pad 160 161 L -pad 170 171 S
-run "flat, draw distance 512"     -pad 100 101 S -pad 104 105 R -pad 110 111 D -pad 120 121 D -pad 130 131 L -pad 140 141 L -pad 150 151 L -pad 160 161 L -pad 170 171 S
+run() {   # name, keys
+    out=$(./hostbuild/sh2sim quake32x.32x build/syms.txt 9 $(press "$2") -pad 300 540 U -vlog /dev/stdout)
+    still=$(echo "$out" | awk 'NF == 3 && $1 >= 200 && $1 < 300 { s += $3; n++ } END { printf "%.1f", s / n / 10 }')
+    walk=$(echo "$out" | awk 'NF == 3 && $1 >= 420 && $1 < 540 { s += $3; n++ } END { printf "%.1f", s / n / 10 }')
+    printf "%-34s spawn view %5s fps   walking %5s fps\n" "$1" "$still" "$walk"
+}
+run "textured + lit (default)"        "SS"
+run "textured, lighting off"          "SDRS"
+run "flat shaded + lit"               "SRS"
+run "flat shaded, lighting off"       "SRDRS"
+run "textured, draw distance 512"     "SDDDLLLLS"
+run "flat, draw distance 512"         "SRDDDLLLLS"
+run "textured, screen size 70%"       "SDDDDLLLS"
+run "flat, screen size 70%"           "SRDDDDLLLS"
+run "textured, screen size 50%"       "SDDDDLLLLLS"
+run "flat, screen size 50%"           "SRDDDDLLLLLS"

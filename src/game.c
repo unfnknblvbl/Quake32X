@@ -2,9 +2,14 @@
 #include "game.h"
 
 player_t player;
-settings_t cfg = { 1, 1, 6, 1, 0 };
+settings_t cfg = { 1, 1, 6, 1, 0, 0, 0 };
 
 const int far_levels[NUM_FAR] = { 256, 384, 512, 768, 1024, 1536, 2048, 3072, 8192 };
+/* screen sizes, like Quake's viewsize: the same view, smaller (10:7 window) */
+const viewsize_t view_sizes[NUM_SIZES] = {
+    { 160, 112, 100 }, { 144, 100, 90 }, { 128, 90, 80 },
+    { 112, 78, 70 }, { 96, 68, 60 }, { 80, 56, 50 },
+};
 
 #define GRAVITY   (800 * 65536 / 3600)     /* units / tick^2 */
 #define JUMPV     (270 * 65536 / 60)
@@ -44,6 +49,16 @@ void game_init(void)
     player.pitch = 0;
     player.vz = 0;
     player.onground = 0;
+#ifdef START_POS
+    {   /* benchmark builds: -DSTART_POS=x,y,z,yaw,pitch (units, degrees) */
+        static const int sp[5] = { START_POS };
+        player.pos[0] = sp[0] << 16;
+        player.pos[1] = sp[1] << 16;
+        player.pos[2] = sp[2] << 16;
+        player.yaw = (sp[3] * 65536 / 360) & 0xFFFF;
+        player.pitch = sp[4] * 65536 / 360;
+    }
+#endif
 }
 
 /* try a horizontal move, stepping up stairs when walking */

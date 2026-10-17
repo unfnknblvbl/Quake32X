@@ -53,11 +53,11 @@ static int clip_poly(const rcpu_t *rc, int k, const vec3_t *in, int n, vec3_t *o
 static void project(const rcpu_t *rc, const vec3_t *v, fixed_t *sx, fixed_t *sy)
 {
     fixed_t z = v->z < NEAR_Z ? NEAR_Z : v->z;
-    int32_t inv = hw_div64((int64_t)PROJ << 40, z);      /* 80 * 2^40 / z */
-    fixed_t x = (CENTERX << 16) + (fixed_t)(((int64_t)v->x * inv) >> 24);
-    fixed_t y = (CENTERY << 16) + (fixed_t)(((int64_t)v->y * inv) >> 24);
+    int32_t inv = hw_div64(view.proj40, z);                 /* proj * 2^40 / z */
+    fixed_t x = view.cx16 + (fixed_t)(((int64_t)v->x * inv) >> 24);
+    fixed_t y = view.cy16 + (fixed_t)(((int64_t)v->y * inv) >> 24);
     if (x < 0) x = 0;
-    if (x > (SCREENW << 16)) x = SCREENW << 16;
+    if (x > view.vw16) x = view.vw16;
     if (y < (rc->row0 << 16)) y = rc->row0 << 16;
     if (y > (rc->row1 << 16)) y = rc->row1 << 16;
     *sx = x;
@@ -89,15 +89,15 @@ static NOINLINE void xform_vert(rcpu_t *rc, vcache_t *e, int vi)
     } else {
         int32_t inv;
         fixed_t sx, sy;
-        hw_div64_start((int64_t)PROJ << 40, z);     /* divide runs while we compute outcodes */
+        hw_div64_start(view.proj40, z);     /* divide runs while we compute outcodes */
         if (z > view.far) oc = 1 << CP_FAR;
         if (y < fixmul(rc->ky0, z)) oc |= 1 << CP_TOP;
         if (y > fixmul(rc->ky1, z)) oc |= 1 << CP_BOTTOM;
         inv = hw_div64_result();
-        sx = (CENTERX << 16) + (fixed_t)(((int64_t)x * inv) >> 24);
-        sy = (CENTERY << 16) + (fixed_t)(((int64_t)y * inv) >> 24);
+        sx = view.cx16 + (fixed_t)(((int64_t)x * inv) >> 24);
+        sy = view.cy16 + (fixed_t)(((int64_t)y * inv) >> 24);
         if (sx < 0) sx = 0;
-        if (sx > (SCREENW << 16)) sx = SCREENW << 16;
+        if (sx > view.vw16) sx = view.vw16;
         if (sy < (rc->row0 << 16)) sy = rc->row0 << 16;
         if (sy > (rc->row1 << 16)) sy = rc->row1 << 16;
         e->sx = sx;
@@ -312,6 +312,25 @@ static void cover_row(rcpu_t *rc, int y, int xs, int xe)
         rc->rowsleft--;
 }
 
+/* see-through liquid: spans for the uncovered parts of [xs,xe), without
+ * covering them (what is behind gets drawn too) */
+static NOINLINE void mesh_row(rcpu_t *rc, int y, int xs, int xe)
+{
+    const gaprow_t *gr = &gaps[y];
+    int i;
+    for (i = 0; i < gr->n; i++) {
+        int gs = gr->g[i * 2], ge = gr->g[i * 2 + 1];
+        span_t *s;
+        if (ge <= xs) continue;
+        if (gs >= xe) break;
+        if (rc->nwspans == MAXWSPANS) return;
+        s = &rc->wspans[rc->nwspans++];
+        s->y = y;
+        s->x0 = gs > xs ? gs : xs;
+        s->x1 = ge < xe ? ge : xe;
+    }
+}
+
 /* does row y have an uncovered gap overlapping [xs,xe)? */
 static inline int row_open(int y, int xs, int xe)
 {
@@ -355,11 +374,15 @@ static int chain_next(chain_t *c, int n, int dir, const fixed_t *sx, const fixed
     return 0;
 }
 
-/* scan-convert a convex polygon by walking its two sides from the top vertex */
-static void raster_poly(rcpu_t *rc, int n, const fixed_t *sx, const fixed_t *sy)
+/* scan-convert a convex polygon by walking its two sides from the top vertex.
+ * Instantiated twice with a constant `mesh`, so the usual copy has no extra
+ * branch in its row loop. */
+static inline __attribute__((always_inline)) void raster_poly(rcpu_t *rc, int n, const fixed_t *sx,
+                                                             const fixed_t *sy, const int mesh)
 {
     fixed_t ymin = sy[0], ymax = sy[0], xmin = sx[0], xmax = sx[0];
     int i, itop = 0, r, rtop, rbot, xs, xe;
+    const int vw = view.vw;             /* local: stores below may alias view */
     chain_t a, b;
 
     for (i = 1; i < n; i++) {
@@ -396,9 +419,11 @@ static void raster_poly(rcpu_t *rc, int n, const fixed_t *sx, const fixed_t *sy)
                 xs = (xl + 0x7FFF) >> 16;
                 xe = (xr + 0x7FFF) >> 16;
                 if (xs < 0) xs = 0;
-                if (xe > SCREENW) xe = SCREENW;
-                if (xs < xe)
-                    cover_row(rc, r, xs, xe);
+                if (xe > vw) xe = vw;
+                if (xs < xe) {
+                    if (mesh) mesh_row(rc, r, xs, xe);
+                    else cover_row(rc, r, xs, xe);
+                }
             }
             a.x += a.dxdy;
             b.x += b.dxdy;
@@ -412,6 +437,11 @@ static void raster_poly(rcpu_t *rc, int n, const fixed_t *sx, const fixed_t *sy)
     }
 }
 
+static NOINLINE void raster_mesh(rcpu_t *rc, int n, const fixed_t *sx, const fixed_t *sy)
+{
+    raster_poly(rc, n, sx, sy, 1);
+}
+
 /* stage C: rasterize the batch's polygons into spans and face records */
 void geom_raster(rcpu_t *rc)
 {
@@ -420,21 +450,34 @@ void geom_raster(rcpu_t *rc)
         int32_t *p = rc->poly + w;
         int fi = p[0] & 0xFFFF, n = p[0] >> 16;
         frec_t *fr = &rc->frec[rc->nfrec];
+        int mesh = 0;
+        if (view.mesh && rc->wfrec && (lvl.fgeom[fi].flags & FF_LIQUID) && rc->nwfrec < MAXWFREC
+            && rc->nwspans < MAXWSPANS - 64) {
+            mesh = 1;                   /* deferred: see draw_liquids */
+            fr = &rc->wfrec[rc->nwfrec];
+        }
         fr->f = &lvl.faces[fi];
         fr->fi = fi;
-        fr->span0 = rc->nspans;
+        fr->span0 = mesh ? rc->nwspans : rc->nspans;
         fr->zmin = p[1];
         fr->refv.x = p[2];
         fr->refv.y = p[3];
         fr->refv.z = p[4];
         fr->refsx = p[5];
         fr->refsy = p[5 + n];
-        rc->cur = fr;
-        raster_poly(rc, n, p + 5, p + 5 + n);
-        fr = rc->cur;                   /* may have moved on span overflow */
-        fr->nspan = rc->nspans - fr->span0;
-        if (fr->nspan)
-            rc->nfrec++;
+        if (mesh) {
+            raster_mesh(rc, n, p + 5, p + 5 + n);
+            fr->nspan = rc->nwspans - fr->span0;
+            if (fr->nspan)
+                rc->nwfrec++;
+        } else {
+            rc->cur = fr;
+            raster_poly(rc, n, p + 5, p + 5 + n, 0);
+            fr = rc->cur;               /* may have moved on span overflow */
+            fr->nspan = rc->nspans - fr->span0;
+            if (fr->nspan)
+                rc->nfrec++;
+        }
         w += 5 + 2 * n;
     }
 }

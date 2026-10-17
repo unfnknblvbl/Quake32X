@@ -44,6 +44,11 @@ ifeq ($(DEMO),1)
 CFLAGS += -DDEMO
 OBJS   += build/demo_data.o
 endif
+# DEMO=bench: the demo route at fixed settings (set with the pad), no macros
+ifeq ($(DEMO),bench)
+CFLAGS += -DDEMO -DDEMO_BENCH
+OBJS   += build/demo_data.o
+endif
 
 build/demo_data.c: tools/make_demo.py data/$(MAP)_route.json | build
 	python3 tools/make_demo.py data/$(MAP)_route.json $@

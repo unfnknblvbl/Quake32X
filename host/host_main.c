@@ -8,7 +8,7 @@
 
 int32_t host_div_result;
 int st_reject, st_clipaway, st_occluded, st_vis, st_sphere;
-volatile uint16_t *r_fb;
+volatile uint16_t *r_fb, *r_screen;
 static uint16_t fbmem[SCREENW * SCREENH];
 
 #define SURFCACHE (72 * 1024)
@@ -37,10 +37,18 @@ int main(int argc, char **argv)
     level_init(blob);
     r_init();
     r_span_init();
-    r_fb = fbmem;
+    r_fb = r_screen = fbmem;
+    view.vw = SCREENW;
+    view.vh = SCREENH;
+    if (getenv("VW")) {            /* reduced screen size: VW=width VH=height */
+        view.vw = atoi(getenv("VW"));
+        view.vh = atoi(getenv("VH"));
+        r_fb = fbmem + ((SCREENH - view.vh) >> 1) * SCREENW + ((SCREENW - view.vw) >> 1);
+    }
+    view.mesh = getenv("MESH") ? atoi(getenv("MESH")) : 0;
     for (k = 0; k < 2; k++) {
         rc[k].cpu = k;
-        sc_init(&rc[k], malloc(SURFCACHE), SURFCACHE, hash[k]);
+        r_arena(&rc[k], malloc(SURFCACHE), SURFCACHE, hash[k], getenv("MESH") && atoi(getenv("MESH")));
     }
 
     org[0] = (fixed_t)(atof(argv[3]) * 65536);
@@ -51,6 +59,7 @@ int main(int argc, char **argv)
     view.textures = argc > 8 ? atoi(argv[8]) : 1;
     view.lighting = argc > 9 ? atoi(argv[9]) : 1;
     view.far = (argc > 10 ? atoi(argv[10]) : 4096) << 16;
+    split = view.vh / 2;
     if (argc > 11) split = atoi(argv[11]);
     if (argc > 12) frames = atoi(argv[12]);
 
@@ -63,7 +72,7 @@ int main(int argc, char **argv)
         view.time = k;
         r_render(&rc[0], 0, split);
         if (getenv("DUMPGAPS")) { extern void dump_gaps(int,int); dump_gaps(0, split); printf("ncand %d\n", rc[0].ncand); }
-        r_render(&rc[1], split, SCREENH);
+        r_render(&rc[1], split, view.vh);
     }
     for (k = 0; k < 2; k++)
         printf("cpu%d rows %3d-%3d: nodes %4d facecalls %4d faces %4d xforms %4d clips %4d spans %5d pixels %6d surfbuilds %3d texels %6d\n",
@@ -74,7 +83,7 @@ int main(int argc, char **argv)
     fprintf(f, "P6\n320 224\n255\n");
     for (int y = 0; y < 224; y++)
         for (int x = 0; x < 320; x++) {
-            int c = fbmem[(y >> 1) * SCREENW + (x >> 1)] & 0xFF;
+            int c = ((const uint8_t *)fbmem)[(y >> 1) * SCREENW * 2 + x];   /* byte 0 = left */
             uint16_t p = lvl.palette[c];
             fputc((p & 31) << 3, f);
             fputc(((p >> 5) & 31) << 3, f);
