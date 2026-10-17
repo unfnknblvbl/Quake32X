@@ -2,8 +2,8 @@
 #include "g_local.h"
 #include "bot.h"
 #include "mdlink.h"
+#include "levels.h"
 
-extern const uint8_t level_data[];
 extern uint8_t _bss_end[];  /* linker symbol __bss_end */
 volatile uint32_t vblank_count;
 volatile uint16_t pad_latch;     /* OR of every pad sample, set by the VBlank IRQ */
@@ -17,6 +17,9 @@ volatile int32_t dbg_fps10;         /* frames a second x 10, for the logs and ha
 
 /* the view weapon of the frame being drawn (the 68000 shows it at the flip) */
 static struct { int weapon, frame; } gun;
+static int viewleaf = -1;
+int g_mode = GM_PLAY;
+int cur_level = -1;
 
 #define SLAVE_GO     MARS_SYS_COMM4
 #define SLAVE_DONE   MARS_SYS_COMM6
@@ -300,11 +303,13 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
 static void update_view(int *viewleaf)
 {
     fixed_t eye[3];
-    int leaf;
+    int leaf, yaw = player.yaw, pitch = player.pitch;
     apply_settings();
     game_eye(eye);
+    if (g_level_done)
+        g_intermission_view(eye, &yaw, &pitch);
     view.time = frame_now;
-    r_setup_view(eye, player.yaw, player.pitch);
+    r_setup_view(eye, yaw, pitch);
     leaf = r_pointleaf(eye);
     view.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
                       && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;     /* water, slime, lava */
@@ -336,16 +341,71 @@ static void update_view(int *viewleaf)
     }
 }
 
+/* a level into the window and everything that depends on it; both CPUs
+ * are idle (the slave waits for its next frame) */
+static void load_level(int n)
+{
+    snd_stop_all();                 /* the mixer must let go of the old pages */
+    level_init(lvl_map(n));
+    cur_level = n;
+    r_init();
+    r_level_init();
+    arena_mesh = -1;                /* empty surface caches (apply_settings) */
+    view.cachegen++;
+    viewleaf = -1;
+    snd_init();
+    g_init();
+    game_init();
+}
+
+/* between frames: what the game asked for */
+static void handle_request(void)
+{
+    int req = g_request;
+    g_request = REQ_NONE;
+    switch (req) {
+    case REQ_NEXT_LEVEL:
+        if (cur_level + 1 < lvl_count()) {
+            g_change_parms();
+            load_level(cur_level + 1);
+        } else {
+            /* the end: a new game (the closing screen comes later) */
+            g_new_game();
+            load_level(0);
+        }
+        break;
+    case REQ_RESTART:
+        g_init();
+        game_respawn();
+        break;
+    case REQ_NEW_GAME:
+        g_mode = GM_PLAY;
+        g_new_game();
+        load_level(0);
+        break;
+    case REQ_BOT:
+        g_mode = GM_PLAY;
+        g_new_game();
+        load_level(0);
+        bot_start();
+        break;
+    }
+}
+
 void pri_main(void)
 {
     uint32_t last_tick, fps_tick;
-    int frames = 0, fps10 = 0, viewleaf = -1;
+    int frames = 0, fps10 = 0;
     uint16_t oldpad = 0, tag = 0;
     int split = SCREENH / 2, splith = SCREENH;
 
-    level_init(level_data);
     md_init();
-    r_init();
+    g_new_game();
+#ifdef START_LEVEL
+    load_level(START_LEVEL);            /* test builds: another level first */
+#else
+    load_level(0);
+#endif
     r_span_init();
     r_oram_init();
     r_fb = r_screen;
@@ -360,13 +420,10 @@ void pri_main(void)
         arena_each = each;
     }
 
-    game_init();
     scene.zbuf = zbuf_mem;
 #if defined(DEMO_CAMERA) || defined(START_POS)
     cfg.monsters = 0;                   /* camera routes and benchmark views: no monsters */
 #endif
-    g_init();
-    snd_init();
     view.cachegen = 1;
     view.mipbias = 0;
     apply_settings();
@@ -377,6 +434,21 @@ void pri_main(void)
     update_view(&viewleaf);
 
     for (;;) {
+#ifdef TEST_NEXT
+        {   /* test builds: through the levels every TEST_NEXT ticks */
+            static uint32_t next_at = TEST_NEXT;
+            if (frame_now >= next_at) {
+                next_at = frame_now + TEST_NEXT;
+                g_request = REQ_NEXT_LEVEL;
+            }
+        }
+#endif
+        if (g_request) {
+            /* both CPUs are idle here: a new level, or this one again */
+            handle_request();
+            last_tick = time_now();
+            update_view(&viewleaf);
+        }
         int32_t mspin = 0, sspin;
         uint16_t fs;
         uint32_t now;

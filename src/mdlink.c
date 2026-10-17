@@ -78,6 +78,23 @@ static void put_word(uint16_t w)
     qhead = next;
 }
 
+/* the cartridge mapper: pages p .. p + 6 into the window's pages 1 .. 7 */
+void md_bank(int page)
+{
+    put_word(0xC000 | (page & 0x3F));
+}
+
+/* until the 68000 has carried out everything sent so far: it takes the
+   next word only when it is done with the one before, so once it has
+   taken a final no-op, the rest is done */
+void md_sync(void)
+{
+    put_word(0xF000);
+    md_wait();
+    while (ack() != seq)
+        ;
+}
+
 void md_init(void)
 {
     qhead = qtail = 0;

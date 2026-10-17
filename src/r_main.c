@@ -6,7 +6,7 @@ view_t  view;
 
 #define MAX_MAP_LEAFS 4096
 #define MAX_MAP_NODES 4096
-#define MAX_MAP_FACES 8192
+#define MAX_MAP_FACES 12288
 
 uint8_t vis_leafs[MAX_MAP_LEAFS / 8];
 uint8_t vis_nodes[MAX_MAP_NODES / 8];

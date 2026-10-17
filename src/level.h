@@ -10,7 +10,7 @@ enum {
     LVL_CLIPNODES, LVL_PALETTE, LVL_COLORMAP, LVL_CONCHARS, LVL_SKYTEX,
     LVL_FACESPH, LVL_NODEPARENT, LVL_BACKTILE,
     LVL_ENTS, LVL_MODELS, LVL_ANORMS, LVL_SOUNDS, LVL_MOVERS, LVL_MKEYS,
-    LVL_TRIGGERS, LVL_STRINGS,
+    LVL_TRIGGERS, LVL_STRINGS, LVL_DEMO,
     LVL_NUMLUMPS
 };
 
@@ -21,6 +21,7 @@ typedef struct {
     fixed_t spawn[3];
     int32_t yaw;
     int16_t headnode, headnode1, numnodes, nworld, visleafs, headnode2;
+    int16_t worldtype, pad;              /* 0 medieval, 1 metal (runic), 2 base */
 } lheader_t;
 
 typedef struct { fixed_t n[3]; fixed_t dist; } lplane_t;            /* 16 */

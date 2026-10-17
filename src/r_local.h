@@ -57,9 +57,9 @@ typedef struct {
     const uint8_t *cut_x;            /* cut_n pairs x0, x1 */
     /* moving brush models (doors, plats): the keyframe of fragments drawn
        for each, the offset still to apply, and camr for its vertices */
-    uint8_t mkey[48];
-    fixed_t mres[48][3];
-    int32_t mcamr[48][3];
+    uint8_t mkey[64];                /* per mover (MAX_MOVERS) */
+    fixed_t mres[64][3];
+    int32_t mcamr[64][3];
 } view_t;
 
 typedef struct { fixed_t x, y, z; } vec3_t;
@@ -246,6 +246,7 @@ surfcache_t *sc_get(rcpu_t *rc, int faceidx, int mip);
 
 /* r_span.c */
 void r_span_init(void);
+void r_level_init(void);
 void r_oram_init(void);
 void draw_spans_tex(rcpu_t *rc, const frec_t *fr);
 void draw_spans_flat(rcpu_t *rc, const frec_t *fr, int color);

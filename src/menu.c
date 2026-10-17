@@ -4,6 +4,7 @@
 #include "g_local.h"
 #include "bot.h"
 #include "mdlink.h"
+#include "levels.h"
 
 int menu_active;
 static int cursor;
@@ -329,7 +330,7 @@ void menu_input(int pressed)
            off hands the controls back where it is */
         if (bot_active) bot_stop();
         else {
-            bot_start();
+            g_request = REQ_BOT;    /* from the start of the first level */
             menu_active = 0;
         }
         break;

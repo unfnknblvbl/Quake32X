@@ -3,9 +3,10 @@ movers.py - Quake's moving brush entities and triggers for the 32X build,
 worked out offline from the BSP entity lump (shared by mkmap.py and
 mkents.py, so both see the same movers in the same order).
 
-A mover is a func_door, func_door_secret, func_plat or func_button. Each
-gets its path as Quake's QuakeC computes it (doors.qc, plats.qc,
-buttons.qc) and a list of keyframes along it, KEY_STEP units apart: mkmap
+A mover is a func_door, func_door_secret, func_plat, func_button or
+func_train. Each gets its path as Quake's QuakeC computes it (doors.qc,
+plats.qc, buttons.qc) and a list of keyframes along it, KEY_STEP units
+apart: mkmap
 clips the mover's faces into the world BSP leaves once per keyframe, and
 the renderer draws the keyframe nearest the mover's position, shifted by
 the small remainder.
@@ -18,7 +19,7 @@ import math
 
 KEY_STEP = 16
 
-MOVER_CLASSES = ('func_door', 'func_door_secret', 'func_plat', 'func_button')
+MOVER_CLASSES = ('func_door', 'func_door_secret', 'func_plat', 'func_button', 'func_train')
 TRIGGER_CLASSES = ('trigger_once', 'trigger_multiple', 'trigger_secret',
                    'trigger_counter', 'trigger_teleport')
 STATIC_CLASSES = ('func_wall', 'func_illusionary', 'func_episodegate', 'func_bossgate')
@@ -54,13 +55,13 @@ def add(a, b, s=1.0):
     return tuple(a[k] + b[k] * s for k in range(3))
 
 
-def keys_along(points):
-    """keyframes every KEY_STEP units along a polyline of offsets"""
+def keys_along(points, step=KEY_STEP):
+    """keyframes every `step` units along a polyline of offsets"""
     out = [tuple(points[0])]
     for a, b in zip(points, points[1:]):
         d = [b[k] - a[k] for k in range(3)]
         ln = math.sqrt(dot(d, d))
-        n = max(1, int(math.ceil(ln / KEY_STEP)))
+        n = max(1, int(math.ceil(ln / step)))
         for i in range(1, n + 1):
             out.append(tuple(a[k] + d[k] * i / n for k in range(3)))
     return [tuple(round(c) for c in p) for p in out]
@@ -94,6 +95,10 @@ def build_movers(ents, models):
             m.update(speed=fnum(e, 'speed', 100) or 100, wait=fnum(e, 'wait', 3) or 3,
                      dmg=fnum(e, 'dmg', 2) or 2,
                      pos=[pos1, pos2], start=pos1)
+            # key doors (DOOR_GOLD_KEY 8, DOOR_SILVER_KEY 16) stay open
+            m['items'] = 2 if sf & 8 else 1 if sf & 16 else 0
+            if m['items']:
+                m['wait'] = -1
             m['keys'] = keys_along([pos1, pos2])
         elif cls == 'func_door_secret':
             a = math.radians(fnum(e, 'angle', 0))
@@ -123,6 +128,23 @@ def build_movers(ents, models):
             m.update(speed=fnum(e, 'speed', 150) or 150, wait=3, dmg=1, pos=[pos1, pos2],
                      start=pos1 if m['targetname'] else pos2)
             m['keys'] = keys_along([pos1, pos2])
+        elif cls == 'func_train':
+            # the path_corners from its target, as offsets that put the
+            # model's mins on each corner; it stops at a corner with wait -1
+            byname = {c.get('targetname'): c for c in ents if c.get('classname') == 'path_corner'}
+            pts, seen, t = [], set(), e.get('target')
+            while t and t in byname and t not in seen:
+                seen.add(t)
+                c = byname[t]
+                o = [float(v) for v in c['origin'].split()]
+                pts.append(tuple(o[k] - mins[k] for k in range(3)))
+                if fnum(c, 'wait', 0) == -1 and len(pts) > 1:
+                    break
+                t = c.get('target')
+            assert 2 <= len(pts) <= 3, (mi, pts)
+            m.update(speed=fnum(e, 'speed', 100) or 100, wait=-1, dmg=fnum(e, 'dmg', 2) or 2,
+                     pos=pts, start=pts[0])
+            m['keys'] = keys_along(pts)
         else:                                   # func_button
             md = movedir(e)
             lip = fnum(e, 'lip', 4)
@@ -167,10 +189,11 @@ def link_doors(movers):
             movers[k]['group'] = group[0]
         lead = movers[group[0]]
         for k in group:
-            for f in ('health', 'targetname', 'message'):
+            for f in ('health', 'targetname', 'message', 'items'):
                 if movers[k].get(f) and not lead.get(f):
                     lead[f] = movers[k][f]
-        if not lead.get('health') and not lead.get('targetname'):
+        # shootable, fired and key doors spawn no touch field
+        if not lead.get('health') and not lead.get('targetname') and not lead.get('items'):
             mins = [min(absbox(movers[k], movers[k]['start'])[0][a] for k in group) for a in range(3)]
             maxs = [max(absbox(movers[k], movers[k]['start'])[1][a] for k in group) for a in range(3)]
             lead['field'] = ([mins[0] - 60, mins[1] - 60, mins[2] - 8],

@@ -22,8 +22,8 @@ typedef struct {
     uint8_t cls, variant;
     int16_t angle;
     int16_t org[3];
-    int16_t half[3];
-    int16_t pad;
+    int16_t half[3];                 /* info_intermission: half[0] = pitch */
+    uint8_t targetname, target;
 } lent_t;
 
 /* model header (ROM) */
@@ -34,7 +34,15 @@ typedef struct {
     uint32_t tris_ofs, colors_ofs, frames_ofs, bbox_ofs;   /* from this header */
 } lmodel_t;
 
-#define MF_ROTATE 8
+#define MF_ROCKET   1                /* Quake's model flags: trails */
+#define MF_GRENADE  2
+#define MF_GIB      4
+#define MF_ROTATE   8
+#define MF_TRACER   16
+#define MF_ZOMGIB   32
+#define MF_TRACER2  64
+#define MF_TRACER3  128
+#define MF_FULLBRIGHT 0x4000         /* (ours) drawn without lighting: flames */
 
 /* a door, secret door, plat or button (ROM), written by tools/mkents.py */
 typedef struct {
@@ -45,8 +53,11 @@ typedef struct {
     int16_t  hull1, hull2;                  /* clip hull head nodes */
     int16_t  mins[3], maxs[3];              /* the brush at offset 0 */
     int16_t  pos[3][3];                     /* path points (offsets) */
-    uint16_t pad;
+    uint8_t  npos, pad;
 } lmover_t;                                                         /* 56 */
+
+#define MVF_SILVER_KEY 0x4000               /* key doors (lmover_t flags) */
+#define MVF_GOLD_KEY   0x8000
 
 /* a trigger volume (ROM) */
 typedef struct {
@@ -59,8 +70,9 @@ typedef struct {
     uint16_t pad;
 } ltrigger_t;                                                       /* 40 */
 
-#define MAX_MOVERS   48
+#define MAX_MOVERS   64
 #define MAX_TRIGGERS 64
+#define MAX_LENTS    192                    /* entity records a level may have */
 
 /* ------------------------------------------------------------------ entities */
 
@@ -175,7 +187,10 @@ extern const lent_t *lents;
 extern int nlents;
 
 /* g_main.c */
-void g_init(void);
+void g_new_game(void);               /* the player as a new game starts */
+void g_change_parms(void);           /* ... as he goes on to the next level */
+void g_init(void);                   /* the level's things; the player as the level began */
+int  g_intermission_view(fixed_t eye[3], int *yaw, int *pitch);
 void g_tick(int buttons, int pressed);
 void g_build_scene(void);
 const lmodel_t *g_model(int i);
@@ -244,7 +259,14 @@ int  m_hull(const ent_t *e);
 /* snd.c */
 void snd_init(void);
 void snd_start(int sound, const fixed_t *org, int vol);   /* vol 0..255 */
+void snd_play(int sound, const fixed_t *org, int vol, int att);
+void snd_static(int sound, const fixed_t org[3], int vol);
 void snd_update(void);
+void snd_stop_all(void);
 void snd_init_slave(void);           /* on the slave: PWM, DMA, interrupt */
+#define ATTN_NONE   0
+#define ATTN_NORM   1
+#define ATTN_IDLE   2
+#define ATTN_STATIC 3
 
 #endif

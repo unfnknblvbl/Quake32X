@@ -254,6 +254,10 @@ static void md_write8(uint32_t a, uint8_t v)
 {
     a &= 0xFFFFFF;
     if (a >= 0xE00000) { md_ram[a & 0xFFFF] = v; return; }
+    if (a >= 0xA130F3 && a <= 0xA130FF && (a & 1)) {     /* Sega's mapper */
+        ssf2_bank[(a & 0xF) >> 1] = v & 0x3F;
+        return;
+    }
     if (a >= 0xA10000 && a < 0xA10020) { io_write(a, v); return; }
     if (a >= 0xA15100 && a < 0xA15140) { sys_write8(a, v); return; }
     if (a >= 0xC00000 && a < 0xC00020) { md_write16(a & ~1, (v << 8) | v); return; }

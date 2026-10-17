@@ -27,6 +27,8 @@ void md_pump(void);                 /* feed queued words to the 68000 */
 void md_wait(void);                 /* until everything queued is sent */
 int  md_busy(void);                 /* words still queued */
 void md_pump_for(int n);            /* wait for the 68000 to take up to n words */
+void md_bank(int page);             /* map cartridge pages page .. page + 6 at 0x02080000 */
+void md_sync(void);                 /* until the 68000 has carried out all sent so far */
 
 /* immediate mode: put everything that should be on screen each frame;
  * md_end sends what changed and clears what was not put again */
@@ -38,8 +40,8 @@ int  md_begin_back(uint32_t key);
 void md_back(int col, int row, int v);
 void md_end_back(void);
 
-/* the view weapon (weapon 0 shotgun, 1 super shotgun; frame -1 = none),
- * shown from the next vertical blank */
+/* the view weapon (MDW_*; frame -1 = none), shown from the next vertical
+ * blank */
 void md_gun(int weapon, int size, int frame);
 /* what the weapon frame hides in the 32X view; 0 if nothing */
 int  md_gun_cut(int weapon, int size, int frame, md_cut_t *cut);

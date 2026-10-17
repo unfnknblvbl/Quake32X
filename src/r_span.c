@@ -19,6 +19,8 @@ static int liquid_tex[NLIQUID] = { -1, -1 };
 static void copy_liquids(void)
 {
     int i, k, n = 0;
+    for (k = 0; k < NLIQUID; k++)
+        liquid_tex[k] = -1;
     for (i = 0; i < lvl.numfaces && n < NLIQUID; i++) {
         const lface_t *f = &lvl.faces[i];
         int tex = lvl.texinfo[f->texinfo].tex;
@@ -73,6 +75,11 @@ void r_span_init(void)
         int c = (i - 128) & 0xFF;
         dbltab[i] = (uint16_t)((c << 8) | c);
     }
+}
+
+/* what the span drawers keep of the level */
+void r_level_init(void)
+{
     copy_liquids();
 }
 

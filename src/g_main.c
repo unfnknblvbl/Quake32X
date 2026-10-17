@@ -4,6 +4,7 @@
  * QuakeC (weapons.qc, items.qc, combat.qc) for the parts used here. */
 #include "g_local.h"
 #include "r_local.h"
+#include "levels.h"
 
 ent_t ents[MAX_ENTS];
 pstate_t ps;
@@ -20,8 +21,16 @@ static int exit_rec = -1;            /* the trigger_changelevel record */
 uint32_t g_level_ticks;
 
 static const lmodel_t *models[MDL_NUM];
-static uint8_t qstate[64];           /* per level record: 0 queued, 1 spawned, 2 dead */
-static int16_t qleaf[64];            /* ... and the leaf of its spot */
+static uint8_t qstate[MAX_LENTS];    /* per level record: 0 queued, 1 spawned, 2 dead */
+static int16_t qleaf[MAX_LENTS];     /* ... and the leaf of its spot */
+static int inter_rec = -1;           /* the info_intermission the camera goes to */
+int g_request;                       /* for the main loop: REQ_* (levels.h) */
+static pstate_t ps_start;            /* the player as the level began (a death restarts it) */
+
+/* static models (torches, flames): drawn, never moved */
+#define MAX_STATICS 64
+static struct { uint8_t model, frame, light, pad; int16_t leaf; uint16_t yaw; fixed_t org[3]; } statics[MAX_STATICS];
+static int nstatics;
 static uint32_t rnd32 = 0x12345678;
 
 enum { Q_QUEUED, Q_SPAWNED, Q_DEAD };
@@ -53,7 +62,18 @@ GCODE fixed_t g_crand(void)
 
 const lmodel_t *g_model(int i)
 {
-    return models[i];
+    return models[i];               /* NULL: not in this level */
+}
+
+static int is_monster_class(int c)
+{
+    return c >= CL_ARMY && c <= CL_ZOMBIE;
+}
+
+/* the classes the spawner can bring in so far */
+static int can_spawn(int c)
+{
+    return (c == CL_ARMY || c == CL_DOG) && models[c == CL_ARMY ? MDL_SOLDIER : MDL_DOG];
 }
 
 static uint32_t isqrt_u(uint32_t x)
@@ -263,7 +283,7 @@ static void spawner(void)
         return;
     if (cap == 255) {
         for (i = 0; i < nlents; i++)
-            if (qstate[i] == Q_QUEUED && (lents[i].cls == CL_ARMY || lents[i].cls == CL_DOG))
+            if (qstate[i] == Q_QUEUED && can_spawn(lents[i].cls))
                 spawn_monster(i, 0);
         return;
     }
@@ -273,7 +293,7 @@ static void spawner(void)
         for (i = 0; i < nlents; i++) {
             fixed_t spot[3];
             int d, blocked = 0;
-            if (qstate[i] != Q_QUEUED || (lents[i].cls != CL_ARMY && lents[i].cls != CL_DOG))
+            if (qstate[i] != Q_QUEUED || !can_spawn(lents[i].cls))
                 continue;
             spot[0] = FX(lents[i].org[0]);
             spot[1] = FX(lents[i].org[1]);
@@ -301,44 +321,132 @@ static void spawner(void)
     }
 }
 
+/* a new game: the player as Quake's SetNewParms makes him */
+GCODE void g_new_game(void)
+{
+    memset(&ps, 0, sizeof(ps));
+    ps.health = 100;
+    ps.shells = 25;
+    ps.weapons = IT_SHOTGUN;
+    ps.weapon = IT_SHOTGUN;
+    ps_start = ps;
+}
+
+/* on to the next level: SetChangeParms keeps the weapons, ammunition and
+ * armour; health back to 50..100; no keys or powerups */
+GCODE void g_change_parms(void)
+{
+    pstate_t p;
+    memset(&p, 0, sizeof(p));
+    if (ps.dead || ps.health <= 0) {
+        g_new_game();
+        return;
+    }
+    p.health = ps.health > 100 ? 100 : ps.health < 50 ? 50 : ps.health;
+    p.armor = ps.armor;
+    p.armortype = ps.armortype;
+    p.shells = ps.shells;
+    p.nails = ps.nails;
+    p.weapons = ps.weapons;
+    p.weapon = ps.weapon;
+    ps = p;
+    ps_start = ps;
+}
+
+static void add_static(int model, int frame, const lent_t *le)
+{
+    fixed_t p[3];
+    if (nstatics >= MAX_STATICS || !models[model])
+        return;
+    p[0] = FX(le->org[0]);
+    p[1] = FX(le->org[1]);
+    p[2] = FX(le->org[2]);
+    statics[nstatics].model = model;
+    statics[nstatics].frame = frame;
+    statics[nstatics].org[0] = p[0];
+    statics[nstatics].org[1] = p[1];
+    statics[nstatics].org[2] = p[2];
+    statics[nstatics].yaw = ANG(le->angle);
+    statics[nstatics].leaf = r_pointleaf(p);
+    statics[nstatics].light = 0;
+    nstatics++;
+}
+
+/* the level's things, its monsters queued; the player as the level began */
 GCODE void g_init(void)
 {
     int i;
     lents = (const lent_t *)(lvl.base + lvl.hdr->lump[LVL_ENTS].ofs);
     nlents = lvl.hdr->lump[LVL_ENTS].count;
+    if (nlents > MAX_LENTS) nlents = MAX_LENTS;
     {
         const uint32_t *mt = (const uint32_t *)(lvl.base + lvl.hdr->lump[LVL_MODELS].ofs);
         for (i = 0; i < MDL_NUM; i++)
-            models[i] = (const lmodel_t *)(lvl.base + mt[i]);
+            models[i] = mt[i] ? (const lmodel_t *)(lvl.base + mt[i]) : NULL;
     }
     memset(ents, 0, sizeof(ents));
     memset(particles, 0, sizeof(particles));
     memset(qstate, 0, sizeof(qstate));
-    memset(&ps, 0, sizeof(ps));
+    ps = ps_start;
     mv_init();
-    ps.health = 100;
-    ps.shells = 25;
-    ps.weapons = IT_SHOTGUN;
-    ps.weapon = IT_SHOTGUN;
     level_time = 1;
     part_until = 0;
     exit_rec = -1;
+    inter_rec = -1;
     g_level_done = 0;
     g_level_ticks = 0;
-    for (i = 0; i < nlents && i < 64; i++) {
-        int c = lents[i].cls;
+    nstatics = 0;
+    for (i = 0; i < nlents; i++) {
+        const lent_t *le = &lents[i];
+        int c = le->cls;
         fixed_t spot[3];
-        spot[0] = FX(lents[i].org[0]);
-        spot[1] = FX(lents[i].org[1]);
-        spot[2] = FX(lents[i].org[2]);
+        spot[0] = FX(le->org[0]);
+        spot[1] = FX(le->org[1]);
+        spot[2] = FX(le->org[2]);
         qleaf[i] = r_pointleaf(spot);
-        if (c == CL_T_CHANGELEVEL)
-            exit_rec = i;
-        if (c == CL_ARMY || c == CL_DOG)
-            ps.total_monsters++;
-        else if (c != CL_T_CHANGELEVEL && c != CL_TELEPORT_DESTINATION)
-            spawn_item(i, &lents[i]);
+        switch (c) {
+        case CL_T_CHANGELEVEL: exit_rec = i; break;
+        case CL_INTERMISSION: if (inter_rec < 0) inter_rec = i; break;
+        case CL_TELEPORT_DESTINATION: break;
+        case CL_L_TORCH_SMALL_WALLTORCH:
+            add_static(MDL_FLAME, 0, le);
+            snd_static(SND_FIRE1, spot, 128);
+            break;
+        case CL_L_FLAME_LARGE_YELLOW:
+        case CL_L_FLAME_SMALL_YELLOW:
+            add_static(MDL_FLAME2, c == CL_L_FLAME_LARGE_YELLOW, le);
+            snd_static(SND_FIRE1, spot, 128);
+            break;
+        case CL_AMB_COMP_HUM: snd_static(SND_COMP1, spot, 255); break;
+        case CL_AMB_DRONE: snd_static(SND_DRONE6, spot, 128); break;
+        case CL_AMB_DRIP: snd_static(SND_DRIP1, spot, 128); break;
+        case CL_AMB_SWAMP1: snd_static(SND_SWAMP1, spot, 128); break;
+        case CL_AMB_SWAMP2: snd_static(SND_SWAMP2, spot, 128); break;
+        case CL_L_FLUORO: snd_static(SND_FL_HUM1, spot, 128); break;
+        case CL_L_FLUOROSPARK: snd_static(SND_BUZZ1, spot, 128); break;
+        default:
+            if (is_monster_class(c))
+                ps.total_monsters++;
+            else
+                spawn_item(i, le);
+        }
     }
+}
+
+/* the intermission camera: the level's info_intermission (or where the
+ * player stands) */
+GCODE int g_intermission_view(fixed_t eye[3], int *yaw, int *pitch)
+{
+    const lent_t *l;
+    if (inter_rec < 0)
+        return 0;
+    l = &lents[inter_rec];
+    eye[0] = FX(l->org[0]);
+    eye[1] = FX(l->org[1]);
+    eye[2] = FX(l->org[2]);
+    *yaw = ANG(l->angle);
+    *pitch = ANG(l->half[0]);
+    return 1;
 }
 
 /* ------------------------------------------------------------ effects */
@@ -779,11 +887,9 @@ GCODE void g_tick(int buttons, int pressed)
 {
     int i;
     if (g_level_done) {
-        /* intermission: the world stops; B or C after two seconds restarts */
-        if (++g_level_done > TICKS(2) && (pressed & (ACT_JUMP | ACT_FIRE))) {
-            g_init();
-            game_respawn();
-        }
+        /* intermission: the world stops; B or C after two seconds goes on */
+        if (++g_level_done > TICKS(2) && (pressed & (ACT_JUMP | ACT_FIRE)))
+            g_request = REQ_NEXT_LEVEL;
         return;
     }
     level_time++;
@@ -791,8 +897,7 @@ GCODE void g_tick(int buttons, int pressed)
     if (ps.dead) {
         /* respawn at the start after two seconds and a button */
         if (level_time - ps.died > TICKS(2) && (pressed & (ACT_JUMP | ACT_FIRE))) {
-            g_init();                   /* single player: the level starts again */
-            game_respawn();
+            g_request = REQ_RESTART;    /* single player: the level starts again */
             return;
         }
     } else {
@@ -945,6 +1050,8 @@ GCODE void g_build_scene(void)
         if (!LEAF_VISIBLE(e->leaf))
             continue;
         m = models[e->model];
+        if (!m)
+            continue;
         yaw = (m->flags & MF_ROTATE) ? (uint16_t)(level_time * 455 / 2) : e->yaw;
         d = &scene.draw[n];
         if (!model_rect(m, e->frame, e->org, yaw, d->rect, &dist))
@@ -966,6 +1073,28 @@ GCODE void g_build_scene(void)
             e->lightdirty = 0;
         }
         d->light = e->light;
+        d->mode = DM_DEPTH;
+        d->dist = dist;
+        n++;
+    }
+    /* torches and flames */
+    for (i = 0; i < nstatics && n < MAX_DRAW - 1; i++) {
+        drawent_t *d = &scene.draw[n];
+        const lmodel_t *m = models[statics[i].model];
+        int dist;
+        if (!LEAF_VISIBLE(statics[i].leaf))
+            continue;
+        if (!model_rect(m, statics[i].frame, statics[i].org, statics[i].yaw, d->rect, &dist))
+            continue;
+        d->mdl = m;
+        d->frame = statics[i].frame;
+        d->skin = 0;
+        d->org[0] = statics[i].org[0];
+        d->org[1] = statics[i].org[1];
+        d->org[2] = statics[i].org[2];
+        d->yaw = statics[i].yaw;
+        d->pitch = 0;
+        d->light = 0;
         d->mode = DM_DEPTH;
         d->dist = dist;
         n++;

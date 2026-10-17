@@ -3,7 +3,7 @@
 mkmap.py - convert a Quake BSP29 map from pak0.pak into a compact,
 big-endian, fixed-point level blob for the Sega 32X renderer.
 
-usage: mkmap.py pak0.pak maps/e1m1.bsp out.lvl
+usage: mkmap.py pak0.pak maps/e1m1.bsp out.lvl [--demo demo1.dem]
 
 All multi-byte values are big-endian (the SH-2 is big-endian).
 Layout is described by the header (see LVL_* in src/level.h).
@@ -238,6 +238,11 @@ def main():
     if '--le' in sys.argv:
         E = '<'
         sys.argv.remove('--le')
+    demo_path = None
+    if '--demo' in sys.argv:
+        i = sys.argv.index('--demo')
+        demo_path = sys.argv[i + 1]
+        del sys.argv[i:i + 2]
     if len(sys.argv) < 4:
         print(__doc__)
         sys.exit(1)
@@ -430,22 +435,13 @@ def main():
     # draws the keyframe nearest the mover's position, shifted by the rest.
     import movers as movers_mod
     movers = movers_mod.build_movers(ents, models)
-    groups = []                     # (model index, offset, mover, key)
-    for mi_, mv in enumerate(movers):
-        for k, off in enumerate(mv['keys']):
-            groups.append((mv['model'], off, mi_, k))
-    for e in ents:
-        mdl = e.get('model', '')
-        if e.get('classname') in movers_mod.STATIC_CLASSES and mdl.startswith('*') and movers_mod.present(e):
-            groups.append((int(mdl[1:]), (0.0, 0.0, 0.0), -1, 0))
-    assert len(movers) < 255 and all(len(mv['keys']) < 256 for mv in movers)
-    leaf_frags = {}
-    nfrag = 0
-    for mi, org, mover, key in groups:
+
+    def clip_model(mi, org):
+        """a brush model's faces at an offset, split into the world leaves:
+        [(leaf, polygon, face, side, unmoved polygon)]"""
         mo = models[mi]
-        org = list(org)
-        firstface, numfaces = mo[14], mo[15]
-        for fi in range(firstface, firstface + numfaces):
+        out = []
+        for fi in range(mo[14], mo[14] + mo[15]):
             f = bspfaces[fi]
             if textures[texinfo[f[4]][8]]['name'] in ('trigger', 'clip'):
                 continue
@@ -458,15 +454,8 @@ def main():
                 node, poly = stack.pop()
                 if node < 0:
                     leaf = -1 - node
-                    if leafs[leaf][0] == CONTENTS_SOLID:
-                        continue
-                    idx = add_face(fi, poly, pts0, side, mover=mover, key=key)
-                    if idx >= 0:
-                        # texture space and the plane move with the model:
-                        # adjusted copies per offset are made below
-                        face_recs[idx]['org'] = org
-                        leaf_frags.setdefault(leaf, []).append(idx)
-                        nfrag += 1
+                    if leafs[leaf][0] != CONTENTS_SOLID:
+                        out.append((leaf, poly, fi, side, pts0))
                     continue
                 n = nodes[node]
                 pl = planes[n[0]]
@@ -475,7 +464,48 @@ def main():
                     stack.append((n[1], fr))
                 if bk:
                     stack.append((n[2], bk))
+        return out
+
+    # a mover whose every keyframe costs many fragments gets its keyframes
+    # further apart (up to 64 units; the renderer shifts by the rest)
+    FRAG_BUDGET = 300
+    for mv in movers:
+        per_key = len(clip_model(mv['model'], mv['keys'][0]))
+        step = movers_mod.KEY_STEP
+        while step < 64 and per_key * len(movers_mod.keys_along(mv['pos'], step)) > FRAG_BUDGET:
+            step *= 2
+        mv['step'] = step
+        mv['keys'] = movers_mod.keys_along(mv['pos'], step)
+
+    groups = []                     # (model index, offset, mover, key)
+    for mi_, mv in enumerate(movers):
+        for k, off in enumerate(mv['keys']):
+            groups.append((mv['model'], off, mi_, k))
+    for e in ents:
+        mdl = e.get('model', '')
+        if e.get('classname') in movers_mod.STATIC_CLASSES and mdl.startswith('*') and movers_mod.present(e):
+            groups.append((int(mdl[1:]), (0.0, 0.0, 0.0), -1, 0))
+    assert len(movers) < 255 and all(len(mv['keys']) < 256 for mv in movers)
+    leaf_frags = {}
+    nfrag = 0
+    per_mover = {}
+    for mi, org, mover, key in groups:
+        org = list(org)
+        for leaf, poly, fi, side, pts0 in clip_model(mi, org):
+            idx = add_face(fi, poly, pts0, side, mover=mover, key=key)
+            if idx >= 0:
+                # texture space and the plane move with the model:
+                # adjusted copies per offset are made below
+                face_recs[idx]['org'] = org
+                leaf_frags.setdefault(leaf, []).append(idx)
+                nfrag += 1
+                per_mover[mover] = per_mover.get(mover, 0) + 1
     print('bmodel fragments:', nfrag)
+    for mv_, n_ in sorted(per_mover.items(), key=lambda x: -x[1])[:6]:
+        if mv_ >= 0:
+            print('  mover %d (%s *%d): %d fragments, %d keyframes %d apart' % (
+                mv_, movers[mv_]['cls'], movers[mv_]['model'], n_, len(movers[mv_]['keys']),
+                movers[mv_]['step']))
 
     # texinfo for fragments: texture coords are relative to the model's own
     # coordinates; for moved models (plats) we create adjusted texinfos.
@@ -541,7 +571,7 @@ def main():
                   'texinfo', 'textures', 'light', 'vis', 'leaffrags', 'clipnodes',
                   'palette', 'colormap', 'conchars', 'skytex', 'facesph', 'nodeparent',
                   'backtile', 'ents', 'models', 'anorms', 'sounds', 'movers', 'mkeys',
-                  'triggers', 'strings']
+                  'triggers', 'strings', 'demo']
     HDR_SIZE = 4 + 4 + len(hdr_fields) * 8 + 64
     blob.data += b'\0' * HDR_SIZE
     offs = {}
@@ -628,7 +658,7 @@ def main():
             ci = [int(round(x)) for x in c]
             r = max(math.sqrt(sum((p[k] / 8.0 - ci[k]) ** 2 for k in range(3))) for p in pts)
             # a mover's fragment is drawn up to half a keyframe step away
-            slack = movers_mod.KEY_STEP // 2 + 1 if rec.get('tag') else 0
+            slack = movers[(rec['tag'] & 0xFF) - 1]['step'] // 2 + 1 if rec.get('tag') else 0
             sph = (ci[0], ci[1], ci[2], int(math.ceil(r)) + 1 + slack)
         b += struct.pack(E + 'HBBBBH4h', first, nv, rec['flags'], rec['lit'], rec['unlit'],
                          rec.get('tag', 0), *sph)
@@ -714,10 +744,21 @@ def main():
     # game data: entities, flat-coloured models, sounds (tools/mkents.py)
     import mkents
     from anorms import ANORMS
-    gd = mkents.add_game_data(blob, pak, pal, ents, models, fx, E, sys.modules[__name__], ANORMS, movers)
+    world = ents[0] if ents and ents[0].get('classname') == 'worldspawn' else {}
+    demo = None
+    if demo_path:
+        import mkdemo
+        demo = mkdemo.convert(pak[demo_path], ents, models, movers, E)
+    gd = mkents.add_game_data(blob, pak, pal, ents, models, fx, E, sys.modules[__name__], ANORMS, movers,
+                              world, *(demo['needs'] if demo else ((), ())))
     for k, (o, n) in gd.items():
         offs[k] = o
         counts[k] = n
+    offs['demo'], counts['demo'] = 0, 0
+    if demo:
+        blob.align(4)
+        offs['demo'] = blob.add(demo['data'])
+        counts['demo'] = demo['count']
 
     # sky: use the back (right) half of the sky texture, 128x128, as a single layer
     sky = None
@@ -750,6 +791,7 @@ def main():
     h += struct.pack(E + '3ii', fx(spawn[0]), fx(spawn[1]), fx(spawn[2]), int(yaw))
     h += struct.pack(E + 'hhh', models[0][9], models[0][10], len(nodes))
     h += struct.pack(E + 'hhh', nworld, models[0][13], models[0][11])
+    h += struct.pack(E + 'hh', int(float(world.get('worldtype', '0'))), 0)
     h = h.ljust(HDR_SIZE, b'\0')
     blob.data[0:HDR_SIZE] = h
     blob.align(16)

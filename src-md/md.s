@@ -20,6 +20,10 @@
 |   1010 0000 ffff ffff  the weapon: frame f (255 = none), shown at the
 |                        next vertical blank
 |   1011 ssss ssss ssss  load weapon set s (one weapon at one screen size)
+|   1100 0000 00pp pppp  the cartridge mapper: pages p .. p+6 into the
+|                        window's pages 1..7 (the SH-2s then see page p at
+|                        0x02080000)
+|   1111 xxxx xxxx xxxx  nothing (the SH-2 sends one to know the rest is done)
 |
 | The pad: an ordinary 3/6-button pad, or the XE-1 AP analogue pad (with
 | 32X-HD's extension for a modern pad's right stick Y and triggers), tried
@@ -235,7 +239,7 @@ command:
         jmp     cmd_table(pc,d0.w)
 cmd_table:
         .word   cur_a - cmd_table, cur_b - cmd_table, gun - cmd_table, load - cmd_table
-        .word   loop - cmd_table, loop - cmd_table, loop - cmd_table, loop - cmd_table
+        .word   bank - cmd_table, loop - cmd_table, loop - cmd_table, loop - cmd_table
 
 cur_a:
         and.w   #0x7FF,d1
@@ -260,6 +264,17 @@ gun:
         bra.w   loop
 load:
         bsr.w   load_set
+        bra.w   loop
+| Sega's mapper (SSF2): 0xA130F3, F5 .. FF choose the pages at 512 KB,
+| 1 MB .. 3.5 MB. Only the SH-2s read there; this loop runs from work RAM
+bank:
+        and.w   #0x3F,d1
+        lea     0xA130F3,a0
+        moveq   #7-1,d2
+1:      move.b  d1,(a0)
+        addq.w  #2,a0
+        addq.b  #1,d1
+        dbra    d2,1b
         bra.w   loop
 
 | the weapon's sprites for the frame in gun_req, and its two palettes

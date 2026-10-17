@@ -71,8 +71,19 @@ typedef struct {
     uint64_t instrs;
 } cpu_t;
 
-static uint8_t rom[4 << 20];
+static uint8_t rom[16 << 20];
 static uint32_t romsize;
+/* Sega's mapper (SSF2): the 4 MB window in eight 512 KB pages, page 0
+   fixed; the 68000 sets the others at 0xA130F3..FF (on for ROMs over 4 MB,
+   as PicoDrive does) */
+static uint8_t ssf2_bank[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+static int link_68k;            /* the Mega Drive side runs (else the link is faked) */
+
+/* a cartridge address seen by the SH-2s (offset in the 4 MB window) -> ROM offset */
+static inline uint32_t rom_ofs(uint32_t o)
+{
+    return ((uint32_t)ssf2_bank[(o >> 19) & 7] << 19) | (o & 0x7FFFF);
+}
 static uint8_t sdram[256 << 10];
 static uint8_t fbmem[2][128 << 10];
 static uint16_t cram[256];
@@ -402,6 +413,16 @@ static void reg_write(cpu_t *c, uint32_t a, int size, uint32_t v)
         else if (size == 2) comm[i] = v;
         else if (off & 1) comm[i] = (comm[i] & 0xFF00) | (v & 0xFF);
         else comm[i] = (comm[i] & 0xFF) | (v << 8);
+        if (!link_68k && i == 5) {
+            /* no 68000: take the link word at once (the mapper command
+               included), as src-md/md.s would */
+            uint16_t w = comm[0];
+            if ((w & 0xF000) == 0xC000) {
+                int k;
+                for (k = 1; k < 8; k++) ssf2_bank[k] = (w & 0x3F) + k - 1;
+            }
+            comm[7] = (comm[7] & 0xFF) | ((comm[5] & 0xFF) << 8);
+        }
         return;
     }
     if (off == 0x30) { pwm_ctrl = v; return; }
@@ -437,7 +458,8 @@ static uint32_t sdram_or_rom_read32(uint32_t a)
 {
     uint32_t pa = a & 0x1FFFFFFF;
     if (pa >= 0x06000000 && pa < 0x06040000) return rd_be(&sdram[pa - 0x06000000], 4);
-    if (pa >= 0x02000000 && pa - 0x02000000 < romsize) return rd_be(&rom[pa - 0x02000000], 4);
+    if (pa >= 0x02000000 && pa < 0x02400000 && rom_ofs(pa - 0x02000000) < romsize)
+        return rd_be(&rom[rom_ofs(pa - 0x02000000)], 4);
     return 0;
 }
 
@@ -459,7 +481,7 @@ static uint32_t mem_read(cpu_t *c, uint32_t a, int size)
     }
     switch (rg) {
     case 1: return rd_be(&sdram[pa - 0x06000000], size);
-    case 2: return pa - 0x02000000 < romsize ? rd_be(&rom[pa - 0x02000000], size) : 0xFFFFFFFF;
+    case 2: return rom_ofs(pa - 0x02000000) < romsize ? rd_be(&rom[rom_ofs(pa - 0x02000000)], size) : 0xFFFFFFFF;
     case 3: return rd_be(&fb_access()[(pa - 0x04000000) & 0x1FFFF], size);
     }
     if (pa < 0x4000) return 0;
@@ -516,7 +538,7 @@ static inline uint16_t fetch(cpu_t *c, uint32_t a)
     else if (region(a) == 1) bus(c, SDRAM_BURST, &c->stall_sdram);
     else if (region(a) == 2) bus(c, ROM_WORD, &c->stall_rom);
     if (pa >= 0x06000000 && pa < 0x06040000) return rd_be(&sdram[pa - 0x06000000], 2);
-    if (pa >= 0x02000000 && pa < 0x02400000) return rd_be(&rom[pa - 0x02000000], 2);
+    if (pa >= 0x02000000 && pa < 0x02400000) return rd_be(&rom[rom_ofs(pa - 0x02000000)], 2);
     die(c, "bad fetch", a);
     return 0;
 }
@@ -1054,6 +1076,7 @@ int main(int argc, char **argv)
         md_init();
     else
         md_on = 0;
+    link_68k = md_on;
 #endif
 
     end = (uint64_t)(seconds * SH2_HZ);

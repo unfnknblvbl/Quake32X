@@ -20,16 +20,16 @@
 ! Mega Drive ROM header at 0x100
         .ascii  "SEGA 32X        "
         .ascii  "(C)HOME 2026.OCT"
-        .ascii  "QUAKE 32X TECH D"
-        .ascii  "EMO - E1M1      "
-        .ascii  "                "
-        .ascii  "QUAKE 32X TECH D"
-        .ascii  "EMO - E1M1      "
-        .ascii  "                "
+        .ascii  "QUAKE 32X - EPIS"
+        .ascii  "ODE 1 (E1M1-E1M3"
+        .ascii  ")               "
+        .ascii  "QUAKE 32X - EPIS"
+        .ascii  "ODE 1 (E1M1-E1M3"
+        .ascii  ")               "
         .ascii  "GM Q32X0001-00"
         .word   0x0000                  /* checksum - patched by tools/fixrom.py */
         .ascii  "J6              "
-        .long   0x00000000,0x003FFFFF   /* ROM start, end */
+        .long   0x00000000,0x007FFFFF   /* ROM start, end - set by tools/mkrom.py */
         .long   0x00FF0000,0x00FFFFFF   /* RAM start, end */
         .ascii  "            "          /* 0x1B0 no SRAM */
         .ascii  "            "          /* 0x1BC modem */
@@ -414,11 +414,14 @@ sec_irq:
         nop
 
 !-----------------------------------------------------------------------
-! Level data in ROM (accessed through the SH-2 cache at 0x02xxxxxx)
+! The level directory: tools/mkrom.py fills it in (the levels themselves
+! follow the program, each from a 512 KB page; src/level.c maps one in)
 !-----------------------------------------------------------------------
         .section .romdata,"a"
         .balign 16
-        .global _level_data
-_level_data:
-        .incbin "build/level.lvl"
+        .global _level_dir
+_level_dir:
+        .ascii  "LEVELDIR"
+        .long   0                       /* count */
+        .space  16 * 8                  /* first page, pages, flags, name[12] */
         .balign 16

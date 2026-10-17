@@ -19,8 +19,6 @@ static fixed_t det_from[3];
 
 void bot_start(void)
 {
-    g_init();
-    game_respawn();
     memset(ignore_until, 0, sizeof(ignore_until));
     wp = 0;
     target = detour = -1;

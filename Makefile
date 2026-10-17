@@ -17,6 +17,11 @@ ASRCS   = $(filter-out src/crt0.s,$(wildcard src/*.s))
 OBJS    = build/crt0.o $(patsubst src/%.c,build/%.o,$(SRCS)) $(patsubst src/%.s,build/%.o,$(ASRCS))
 
 MAP     ?= e1m1
+# the levels in the cartridge, in the order of play
+LEVELS  = e1m1 e1m2 e1m3
+LVLS    = $(patsubst %,build/%.lvl,$(LEVELS))
+# the attract demo is in its level's blob
+DEMO_e1m3 = --demo demo1.dem
 
 all: quake32x.32x
 
@@ -29,11 +34,17 @@ build/m68k.bin: src-md/md.s src-md/md.ld | build
 build/md_data.bin: tools/mkmd.py data/pak0.pak | build
 	python3 -I tools/mkmd.py data/pak0.pak $@
 
-data/$(MAP).lvl: tools/mkmap.py tools/mkents.py tools/anorms.py data/pak0.pak
-	python3 tools/mkmap.py data/pak0.pak maps/$(MAP).bsp $@
+LVLTOOLS = tools/mkmap.py tools/mkents.py tools/movers.py tools/anorms.py tools/mkdemo.py tools/dem.py
 
-build/level.lvl: data/$(MAP).lvl | build
-	cp $< $@
+# the host build's level (little-endian)
+data/$(MAP)_le.lvl: $(LVLTOOLS) data/pak0.pak
+	python3 -I tools/mkmap.py --le data/pak0.pak maps/$(MAP).bsp $@
+
+build/%.lvl: $(LVLTOOLS) data/pak0.pak | build
+	python3 -I tools/mkmap.py data/pak0.pak maps/$*.bsp $@ $(DEMO_$*)
+
+src/g_ids.h src/g_frames.h: tools/mkents.py
+	python3 -I tools/mkents.py --header src/g_ids.h src/g_frames.h data/pak0.pak
 
 # FAST=1: stacks and the span loop in SH-2 on-chip RAM (two-way cache mode).
 # Faster, but needs an emulator/hardware that supports the cache data array
@@ -70,7 +81,7 @@ build/demo_data.c: tools/make_demo.py data/$(MAP)_route.json | build
 build/demo_data.o: build/demo_data.c src/demo.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-build/crt0.o: src/crt0.s build/m68k.bin build/md_data.bin build/level.lvl
+build/crt0.o: src/crt0.s build/m68k.bin build/md_data.bin
 	$(AS) --big $(ASDEFS) -o $@ $<
 
 build/%.o: src/%.s | build
@@ -87,9 +98,9 @@ build/%.o: src/%.c src/*.h | build
 build/q32x.elf: $(OBJS) src/mars.ld
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) -lgcc
 
-quake32x.32x: build/q32x.elf tools/fixrom.py
+quake32x.32x: build/q32x.elf tools/mkrom.py $(LVLS)
 	$(OBJCOPY) -O binary $< build/q32x.bin
-	python3 tools/fixrom.py build/q32x.bin $@
+	python3 -I tools/mkrom.py build/q32x.bin $@ $(LVLS)
 
 build:
 	mkdir -p build
