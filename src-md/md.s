@@ -50,7 +50,7 @@
         .equ    VCOUNT,   0xA1512F      /* COMM14 low byte: vblank count */
         .equ    SAT_CMD,  0x70000003    /* VRAM write 0xF000: sprite table */
         .equ    GUN_CMD,  0x72000000    /* VRAM write 0x3200: weapon tiles (tile 400) */
-        .equ    CRAM2_CMD, 0xC0400000   /* CRAM write, palette line 2 */
+        .equ    CRAM1_CMD, 0xC0200000   /* CRAM write, palette line 1 */
 
         .text
         .org    0x000
@@ -121,7 +121,7 @@ main_start:
         move.w  #0x3FC,(a1)
         move.w  #0,(a1)
 
-        | fixed tiles (font, border) and their palettes, from ROM
+        | fixed tiles (font, border) and their palette (line 0), from ROM
         lea     MD_DATA,a2
         move.l  a2,a3
         add.l   4(a2),a3
@@ -277,8 +277,8 @@ bank:
         dbra    d2,1b
         bra.w   loop
 
-| the weapon's sprites for the frame in gun_req, and its two palettes
-| (lines 2 and 3) after a new set was loaded
+| the weapon's sprites for the frame in gun_req, and its three palettes
+| (lines 1 to 3) after a new set was loaded
 show_gun:
         move.w  gun_req,d1
         move.l  cur_set,d0
@@ -293,8 +293,8 @@ show_gun:
         clr.b   pal_dirty
         lea     MD_DATA,a1
         add.l   12(a0),a1
-        move.l  #CRAM2_CMD,(a6)
-        moveq   #16-1,d4
+        move.l  #CRAM1_CMD,(a6)
+        moveq   #24-1,d4
 2:      move.l  (a1)+,(a5)
         dbra    d4,2b
 1:

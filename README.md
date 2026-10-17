@@ -27,8 +27,10 @@ the demo.
 
 A menu setting, **Monsters at once**, caps how many monsters are in the
 world at a time (2 by default); the rest wait in a queue and teleport in,
-with Quake's teleport sound and particle burst, as others die. **Demo (bot
-plays)** in the same menu lets a bot play E1M1 from the start.
+with Quake's teleport sound and particle burst, as others die. Bodies (and
+the heads of gibbed monsters) teleport away in the same burst a second
+after they come to rest, so there is less to draw and think about. **Demo
+(bot plays)** in the same menu lets a bot play E1M1 from the start.
 
 The Mega Drive does its share: its VDP draws the text, the border around a
 reduced view and the view weapon (pre-rendered sprites) over the 32X
@@ -399,13 +401,21 @@ The Mega Drive layer (`src-md/md.s`, `src/mdlink.c`, `tools/mkmd.py`):
   are on the Mega Drive's 8-pixel grid, so the border is made of whole tiles.
 * **The view weapon** is a set of sprites. `tools/mkmd.py` renders the
   axe, shotgun, super shotgun, nailgun and grenade launcher frames at every
-  screen size, textured and lit
-  the way Quake lights models, at full 320-pixel resolution and
-  anti-aliased. The weapon has one fixed, bright look (it does not darken
-  with the room). Each set (a weapon at a screen size) has two 15-colour
-  palettes, and each sprite (up to 4x4 tiles) uses whichever suits it. The
-  68000 copies the current set's frames into VRAM when the weapon or screen
-  size changes (up to 320 tiles) and places the sprites each frame.
+  screen size the way Quake's alias renderer draws them: clipped 5 units in
+  front of the eye, back faces culled, textured and lit as Quake lights
+  models (at Quake's brightest light, then 1.3 times brighter, since the
+  Mega Drive's 3 bits per channel lose dark detail), at full 320-pixel
+  resolution and anti-aliased. The weapon has one fixed look (it does not
+  darken with the room). Each channel is then ordered-dithered to the Mega
+  Drive's 8 levels with a light 4x4 Bayer pattern, the same threshold for
+  all three, so greys stay grey and browns stay brown. Each set (a weapon
+  at a screen size) has three 15-colour palettes of the colours its frames
+  use most, and each sprite (up to 4x4 tiles) uses whichever suits it. The
+  68000 copies the current set's frames into VRAM and its palettes into
+  lines 1 to 3 when the weapon or screen size changes (up to 320 tiles),
+  and places the sprites each frame. The font and the border share
+  palette line 0: on the 3-bit grid they need only 11 colours between
+  them.
 * **The cutout.** For every weapon frame, `mkmd.py` also stores the 32X
   pixels the sprite covers completely, row by row. The renderer starts each
   frame with those marked as covered in its coverage lists, so nothing
@@ -541,7 +551,8 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
   32X-HD's description of its timing, and `-analog FROM TO lx ly rx ry lt
   rt` sets its sticks and triggers between two vblanks.
 * `tools/mkmd.py`: the Mega Drive tiles, palettes, pre-rendered weapon
-  sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x4000).
+  sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x4000);
+  a third argument writes a preview image of every weapon set.
 * `tools/movers.py`: doors, platforms, buttons and triggers worked out from
   the entity lump, shared by `mkmap.py` and `mkents.py`.
 * `tools/mkents.py`: entities, models and sounds for the level blob;

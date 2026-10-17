@@ -9,10 +9,13 @@ needs from pak0.pak:
   - fixed tiles: blank, black, a dither for shading, Quake's console font
     (conchars) and the border pattern (backtile), plain and shaded
   - the view weapons pre-rendered at every screen size as Mega Drive
-    sprites: textured, Gouraud-lit (at one fixed, bright light) and
-    anti-aliased at the full 320-pixel width; each set (a weapon at a
-    screen size) has two 15-colour palettes, and each sprite (a block of up
-    to 4x4 tiles) uses whichever suits it
+    sprites, the way Quake's alias renderer draws them (near-plane clipped,
+    back faces culled, textured and Gouraud-lit at one fixed light, 1.3x
+    Quake's brightest), anti-aliased at the full 320-pixel width and
+    ordered-dithered (a light 4x4 Bayer dither) to the Mega Drive's 3 bits
+    per channel; each set (a weapon at a screen size) has three 15-colour
+    palettes, and each sprite (a block of up to 4x4 tiles) uses whichever
+    suits it
   - for each weapon frame, the rows of the 32X view it covers completely
     (in 32X pixels, two screen pixels by two lines): the 32X skips those
 
@@ -24,14 +27,15 @@ ROM. Layout (offsets from the start of the file):
   header   'MDQ1', static tile ofs, static tile count, static palette ofs,
            set count, set table ofs, size count, weapon count
   static   tiles 0..STATIC_TILES-1 (32 bytes each, 4 bits per pixel)
-  palettes line 0 (font) and line 1 (border), 16 words each
+  palettes line 0 (the font and the border share it) and line 1 (unused:
+           the weapon's), 16 words each
   sets     one per (weapon, screen size), 32 bytes each:
              tiles ofs, tile count (u16), frame count (u16),
              frame table ofs, palette ofs, cutout table ofs, pad
   frame    u16 sprite count, then per sprite four words, ready for the
            sprite table: y + 128, size << 8, tile word, x + 128
   cutout   u8 first row, u8 row count, then (x0, x1) per row (x1 = 0: none)
-  palette  32 words: palette lines 2 and 3
+  palette  48 words: palette lines 1, 2 and 3
 """
 import math
 import os
@@ -51,7 +55,6 @@ VIEW_ROWS = 104                    # 32X rows above the status bar
 # the view weapons, in the order of MDW_ in src/mdlink.h
 WEAPONS = ['progs/v_axe.mdl', 'progs/v_shot.mdl', 'progs/v_shot2.mdl', 'progs/v_nail.mdl',
            'progs/v_rock.mdl']
-SCALE_FROM = 'progs/v_shot.mdl'    # the weapon whose idle frame sets the brightness
 # frames kept (the axe's second swing, frames 5-8, would not fit in VRAM
 # with the first: the game uses the first swing for both)
 WEAPON_FRAMES = {'progs/v_axe.mdl': 5}
@@ -62,12 +65,15 @@ SHADE_TILE = BORDER_TILE + 64
 STATIC_TILES = SHADE_TILE + 64     # 400
 GUN_TILE = STATIC_TILES
 GUN_TILES_MAX = 1536 - GUN_TILE    # VRAM 0x0000-0xBFFF holds tiles
-GUN_PAL = 2                        # palette lines for the weapon: 2 and 3
+GUN_PAL = 1                        # palette lines for the weapon: 1, 2 and 3
+GUN_NPAL = 3
 
 SS = 3                             # supersampling for the weapon renders
 REF_LIGHT = 128                    # the light the weapon is rendered at (Quake's brightest)
-BRIGHT = 230                       # where the weapon's brightest parts end up
-GAMMA = 0.8                        # a little lift: 3 bits per channel lose dark detail
+LIGHT_SCALE = 1.3                  # and a little brighter: 3 bits per channel lose dark detail
+DITHER = 0.6                       # ordered dither strength (1 = full)
+BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]])
+LUMA = np.array([0.299, 0.587, 0.114])
 
 
 def md_level(v):
@@ -157,6 +163,20 @@ def static_tiles(pak, pal):
         bmap = {k: 2 + i for i, k in enumerate(bkeys)}
         border_pal = [0, 0] + [cram(prgb[k]) for k in bkeys]
     border_pal += [0] * (16 - len(border_pal))
+    # the font and the border share palette line 0 (the weapon has the
+    # other three): their colours on the 3-bit grid are few
+    merged = [0, 0]
+    remap_f, remap_b = {}, {}
+    for src, remap, used_i in ((font_pal, remap_f, fmap.values()), (border_pal, remap_b, bmap.values())):
+        for i in sorted(set(used_i)):
+            w = src[i]
+            if w not in merged[2:]:
+                merged.append(w)
+            remap[i] = 2 + merged[2:].index(w)
+    assert len(merged) <= 16, 'font and border need %d colours' % (len(merged) - 2)
+    fmap = {k: remap_f[v] for k, v in fmap.items()}
+    bmap = {k: remap_b[v] for k, v in bmap.items()}
+    font_pal = merged + [0] * (16 - len(merged))
 
     tiles = []
     blank = [[0] * 8 for _ in range(8)]
@@ -235,14 +255,37 @@ def load_mdl(d):
                 st=st, tris=tris, frames=frames, nverts=nverts)
 
 
-def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
+ALIAS_Z_CLIP = 5.0                 # Quake clips alias models 5 units in front of the eye
+# V_CalcRefdef's fudge: the weapon is raised 2 units at viewsize 100, 1 at
+# 90, 0.5 at 80 and not at all below
+GUN_RAISE = {0: 2.0, 1: 1.0, 2: 0.5}
+
+
+def clip_near(poly):
+    """a polygon of (x, y, z, s, t, light) clipped to z >= ALIAS_Z_CLIP"""
+    out = []
+    for k in range(len(poly)):
+        a, b = poly[k], poly[(k + 1) % len(poly)]
+        ain, bin_ = a[2] >= ALIAS_Z_CLIP, b[2] >= ALIAS_Z_CLIP
+        if ain:
+            out.append(a)
+        if ain != bin_:
+            f = (ALIAS_Z_CLIP - a[2]) / (b[2] - a[2])
+            out.append(tuple(a[i] + f * (b[i] - a[i]) for i in range(6)))
+    return out
+
+
+def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0, size=0):
     """the weapon as the 32X would see it in a vw x vh view, at full
-    resolution: returns (rgb float (H, W, 3), alpha float (H, W))"""
+    resolution: returns (rgb float (H, W, 3), alpha float (H, W)). Like
+    Quake's alias renderer: triangles clipped at the near plane, back faces
+    culled, texture and light interpolated across the screen"""
     W, H = 2 * vw * SS, 2 * vh * SS
     focal = vw * SS
     fv = m['frames'][frame]
     sc, og = m['scale'], m['org']
     n = m['nverts']
+    raise_ = GUN_RAISE.get(size, 0.0)
     P = np.zeros((n, 3))
     N = np.zeros((n, 3))
     for i in range(n):
@@ -250,7 +293,7 @@ def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
         x = sc[0] * b[0] + og[0]
         y = sc[1] * b[1] + og[1]
         z = sc[2] * b[2] + og[2]
-        P[i] = (-y, -z - 1.0, x)        # view right, down, forward (r_model.c)
+        P[i] = (-y, -(z + raise_), x)   # view right, down, forward
         N[i] = ANORMS[b[3]]
     # Quake's alias lighting: ambient, plus shade on the side away from the
     # light vector (-1, 0, 0) turned into the model's frame
@@ -263,8 +306,6 @@ def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
     lc = N @ lv
     light = (255 - amb) + np.where(lc < 0, shade * lc, 0.0)
     light = np.clip(light, 0, 255)
-    sx = W / 2 + P[:, 0] * focal / P[:, 2]
-    sy = H / 2 + P[:, 1] * focal / P[:, 2]
 
     zbuf = np.full((H, W), np.inf)
     rgb = np.zeros((H, W, 3))
@@ -273,40 +314,27 @@ def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
     sw, sh = m['sw'], m['sh']
     prgb = np.frombuffer(pal, np.uint8).reshape(256, 3).astype(float)
     cmap = np.frombuffer(colormap, np.uint8).reshape(64, 256)
-    for facesfront, i0, i1, i2 in m['tris']:
-        idx = (i0, i1, i2)
-        xs = np.array([sx[i] for i in idx])
-        ys = np.array([sy[i] for i in idx])
-        # back faces (screen winding) are not drawn
-        area = (xs[1] - xs[0]) * (ys[2] - ys[0]) - (xs[2] - xs[0]) * (ys[1] - ys[0])
-        if area >= 0 or min(P[i][2] for i in idx) < 1:
-            continue
+
+    def raster(xs, ys, zs, ss, ts, ls, area):
         x0, x1 = max(0, int(math.floor(xs.min()))), min(W - 1, int(math.ceil(xs.max())))
         y0, y1 = max(0, int(math.floor(ys.min()))), min(H - 1, int(math.ceil(ys.max())))
         if x0 > x1 or y0 > y1:
-            continue
+            return
         gx, gy = np.meshgrid(np.arange(x0, x1 + 1) + 0.5, np.arange(y0, y1 + 1) + 0.5)
         w0 = ((xs[1] - gx) * (ys[2] - gy) - (xs[2] - gx) * (ys[1] - gy)) / area
         w1 = ((xs[2] - gx) * (ys[0] - gy) - (xs[0] - gx) * (ys[2] - gy)) / area
         w2 = 1 - w0 - w1
         inside = (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
         if not inside.any():
-            continue
-        zs = np.array([P[i][2] for i in idx])
+            return
         z = w0 * zs[0] + w1 * zs[1] + w2 * zs[2]
         sub = zbuf[y0:y1 + 1, x0:x1 + 1]
         draw = inside & (z < sub)
         if not draw.any():
-            continue
-        stc = []
-        for i in idx:
-            onseam, s, t = m['st'][i]
-            if onseam and not facesfront:
-                s += sw // 2
-            stc.append((s, t))
-        s = w0 * stc[0][0] + w1 * stc[1][0] + w2 * stc[2][0]
-        t = w0 * stc[0][1] + w1 * stc[1][1] + w2 * stc[2][1]
-        li = w0 * light[i0] + w1 * light[i1] + w2 * light[i2]
+            return
+        s = w0 * ss[0] + w1 * ss[1] + w2 * ss[2]
+        t = w0 * ts[0] + w1 * ts[1] + w2 * ts[2]
+        li = w0 * ls[0] + w1 * ls[1] + w2 * ls[2]
         si = np.clip(s.astype(int), 0, sw - 1)
         ti = np.clip(t.astype(int), 0, sh - 1)
         tex = skin[ti, si]
@@ -315,6 +343,28 @@ def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
         sub[draw] = z[draw]
         rgb[y0:y1 + 1, x0:x1 + 1][draw] = col[draw]
         cov[y0:y1 + 1, x0:x1 + 1][draw] = True
+
+    for facesfront, i0, i1, i2 in m['tris']:
+        poly = []
+        for i in (i0, i1, i2):
+            onseam, s, t = m['st'][i]
+            if onseam and not facesfront:
+                s += sw // 2
+            poly.append((P[i][0], P[i][1], P[i][2], s, t, light[i]))
+        poly = clip_near(poly)
+        if len(poly) < 3:
+            continue
+        v = np.array(poly)
+        xs = W / 2 + v[:, 0] * focal / v[:, 2]
+        ys = H / 2 + v[:, 1] * focal / v[:, 2]
+        for k in range(1, len(poly) - 1):
+            ix = [0, k, k + 1]
+            tx, ty = xs[ix], ys[ix]
+            # back faces are not drawn: Quake's test (d_polyse.c), as in r_model.c
+            area = (tx[1] - tx[0]) * (ty[2] - ty[0]) - (tx[2] - tx[0]) * (ty[1] - ty[0])
+            if area <= 0:
+                continue
+            raster(tx, ty, v[ix, 2], v[ix, 3], v[ix, 4], v[ix, 5], area)
     # box-filter the supersamples
     h, w = H // SS, W // SS
     c = cov.reshape(h, SS, w, SS).astype(float)
@@ -322,7 +372,6 @@ def render_gun(m, frame, vw, vh, pal, colormap, yaw_deg=180.0):
     acc = (rgb * cov[:, :, None]).reshape(h, SS, w, SS, 3).sum(axis=(1, 3))
     cnt = c.sum(axis=(1, 3))
     out = acc / np.maximum(cnt, 1)[:, :, None]
-    out = 255.0 * (out / 255.0) ** GAMMA
     return out, alpha
 
 
@@ -351,88 +400,88 @@ def frame_blocks(mask):
     return blocks
 
 
-GRID = np.array([[r, g, b] for r in range(8) for g in range(8) for b in range(8)], float) * 255 // 7
+def ccomp(a, b):
+    """colour difference (Yliluoma's): brightness counts most, then hue"""
+    d = a - b
+    return ((d * d) @ LUMA) * 0.75 + (a @ LUMA - b @ LUMA) ** 2
 
 
-def palette_for(pts, w):
-    """15 different Mega Drive colours for these pixels: k-means on the 3-bit
-    grid, then (where centres landed on the same grid colour) the grid
-    colours that cut the error most"""
-    q = np.round(pts / 4).astype(int)
-    keys, inv = np.unique(q, axis=0, return_inverse=True)
-    inv = inv.reshape(-1)
-    kw = np.bincount(inv, weights=w)
-    kp = np.zeros((len(keys), 3))
-    for c in range(3):
-        kp[:, c] = np.bincount(inv, weights=pts[:, c] * w) / kw
-    cent = kmeans(kp, kw, 15, snapped=True)
-    shown = np.unique(np.array([snap(c) for c in cent]), axis=0)
-    dg = (((kp[:, None, :] - GRID[None, :, :]) ** 2) * WEIGHT).sum(2)     # point x grid
-    while len(shown) < 15:
-        best = (((kp[:, None, :] - shown[None, :, :]) ** 2) * WEIGHT).sum(2).min(1)
-        gain = (np.maximum(best[:, None] - dg, 0) * kw[:, None]).sum(0)
-        k = int(gain.argmax())
-        if gain[k] <= 0:
-            break
-        shown = np.vstack([shown, GRID[k]])
-    while len(shown) < 15:
-        shown = np.vstack([shown, shown[0]])
-    return shown
+def grid_dither(rgb):
+    """each channel ordered-dithered to the Mega Drive's 8 levels with the
+    same Bayer threshold, so a grey stays a grey; returns 9-bit codes
+    (r << 6 | g << 3 | b)"""
+    h, w = rgb.shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w]
+    t = (BAYER4[yy % 4, xx % 4] + 0.5) / 16 - 0.5
+    lv = np.clip(np.floor(rgb * 7 / 255.0 + DITHER * t[:, :, None] + 0.5), 0, 7).astype(int)
+    return lv @ np.array([64, 8, 1])
 
 
-def nearest(pts, shown):
-    d = (((pts[:, None, :] - shown[None, :, :]) ** 2) * WEIGHT).sum(2)
-    return d.argmin(1), d.min(1)
+def code_rgb(c):
+    c = np.asarray(c)
+    return np.stack([(c >> 6) & 7, (c >> 3) & 7, c & 7], -1) * 255.0 / 7
+
+
+def code_cram(c):
+    return (int(c) & 7) << 9 | ((int(c) >> 3) & 7) << 5 | ((int(c) >> 6) & 7) << 1
+
+
+def palette_from(codes):
+    """the 15 colours these pixels use most"""
+    u, n = np.unique(codes, return_counts=True)
+    keep = list(u[np.argsort(-n, kind='stable')][:15])
+    while len(keep) < 15:
+        keep.append(keep[0])
+    return np.array(keep)
+
+
+def palette_cost(codes, pal):
+    if not len(codes):
+        return 0.0
+    return ccomp(code_rgb(codes)[:, None, :], code_rgb(pal)[None, :, :]).min(1).sum()
 
 
 def build_sets(pak, pal, colormap, preview=None):
     """every weapon at every screen size: the frames as colour indices, each
-    sprite block on one of two 15-colour palettes made for that set"""
+    sprite block on one of three 15-colour palettes made for that set"""
     sets = []
-    # one fixed, bright look: the shotgun's brightest parts (98th percentile
-    # of its full-size idle frame) at BRIGHT; the same scale for every
-    # weapon at every size
-    rgb, al = render_gun(load_mdl(pak[SCALE_FROM]), 0, SIZES[0][0], SIZES[0][1], pal, colormap)
-    scale = BRIGHT / max(1.0, np.percentile(rgb[al >= 0.5].max(1), 98))
-    print('weapon colour scale %.2f' % scale)
     for wi, path in enumerate(WEAPONS):
         m = load_mdl(pak[path])
         nframes = min(len(m['frames']), WEAPON_FRAMES.get(path, 99))
         for si, (vw, vh) in enumerate(SIZES):
-            renders = [render_gun(m, f, vw, vh, pal, colormap) for f in range(nframes)]
-            renders = [(np.clip(r[0] * scale, 0, 255), r[1]) for r in renders]
-            blocks = []                 # (frame, y, x, rows, cols, opaque pixels)
-            for f, (rgb, al) in enumerate(renders):
-                mask = al >= 0.5
+            renders = [render_gun(m, f, vw, vh, pal, colormap, size=si) for f in range(nframes)]
+            masks = [al >= 0.5 for _, al in renders]
+            codes = [grid_dither(np.clip(rgb * LIGHT_SCALE, 0, 255)) for rgb, _ in renders]
+            blocks = []                 # (frame, y, x, rows, cols, the opaque pixels' codes)
+            for f, mask in enumerate(masks):
                 for (y, x, th, tw) in frame_blocks(mask):
-                    sub = rgb[y:y + th * 8, x:x + tw * 8][mask[y:y + th * 8, x:x + tw * 8]]
+                    sub = codes[f][y:y + th * 8, x:x + tw * 8][mask[y:y + th * 8, x:x + tw * 8]]
                     blocks.append([f, y, x, th, tw, sub])
-            # two palettes: split the blocks by brightness, then let each
-            # block take the palette that fits it better, a few times over
-            lum = np.array([(b[5] * WEIGHT).sum(1).mean() if len(b[5]) else 0 for b in blocks])
-            group = (lum > np.median(lum)).astype(int)
+            allc = np.concatenate([b[5] for b in blocks])
+            # three palettes: the blocks split by brightness, then each block
+            # takes the palette that fits it best, a few times over
+            lum = np.array([code_rgb(b[5]).mean() if len(b[5]) else 0 for b in blocks])
+            group = np.searchsorted(np.quantile(lum, np.linspace(0, 1, GUN_NPAL + 1)[1:-1]), lum)
             for _ in range(4):
                 pals = []
-                for g in (0, 1):
-                    pts = [b[5] for b, k in zip(blocks, group) if k == g and len(b[5])]
-                    if not pts:
-                        pts = [b[5] for b in blocks if len(b[5])]
-                    pts = np.vstack(pts)
-                    pals.append(palette_for(pts, np.ones(len(pts))))
-                group = np.array([int(np.argmin([nearest(b[5], pals[g])[1].sum() for g in (0, 1)]))
-                                  if len(b[5]) else 0 for b in blocks])
-            frames = [np.zeros(r[1].shape, int) for r in renders]
+                for g in range(GUN_NPAL):
+                    c = [b[5] for b, k in zip(blocks, group) if k == g and len(b[5])]
+                    pals.append(palette_from(np.concatenate(c) if c else allc))
+                group = np.array([int(np.argmin([palette_cost(b[5], pals[g]) for g in range(GUN_NPAL)]))
+                                  for b in blocks])
+            frames = [np.zeros(mk.shape, int) for mk in masks]
             lines = [[] for _ in renders]
             for b, g in zip(blocks, group):
                 f, y, x, th, tw, _ = b
-                rgb, al = renders[f]
-                reg = rgb[y:y + th * 8, x:x + tw * 8]
-                msk = al[y:y + th * 8, x:x + tw * 8] >= 0.5
-                idx, _ = nearest(reg.reshape(-1, 3), pals[g])
+                msk = masks[f][y:y + th * 8, x:x + tw * 8]
+                reg = codes[f][y:y + th * 8, x:x + tw * 8]
+                idx = ccomp(code_rgb(reg.reshape(-1))[:, None, :], code_rgb(pals[g])[None, :, :]).argmin(1)
                 idx = (idx + 1).reshape(msk.shape) * msk
                 frames[f][y:y + idx.shape[0], x:x + idx.shape[1]] = idx
                 lines[f].append((y, x, th, tw, g))
-            words = [0] + [cram(c) for c in pals[0]] + [0] + [cram(c) for c in pals[1]]
+            words = []
+            for g in range(GUN_NPAL):
+                words += [0] + [code_cram(c) for c in pals[g]]
             sets.append(dict(weapon=wi, size=si, vw=vw, vh=vh, frames=frames, blocks=lines, pal=words))
             if preview is not None:
                 save_preview(preview, '%s_s%d' % (os.path.basename(path)[:-4], si), frames, lines, words)
@@ -529,7 +578,7 @@ def main():
     b.add(bytes(64))
     hdr = {}
     hdr['tiles'] = b.add(tiles, 4)
-    hdr['pal'] = b.add(struct.pack('>32H', *(font_pal + border_pal)), 4)
+    hdr['pal'] = b.add(struct.pack('>32H', *(font_pal + [0] * 16)), 4)
     table = []
     total, worst = 0, 0
     for s in sets:
@@ -547,7 +596,7 @@ def main():
         to = b.add(bytes(alltiles), 4)
         fo = b.add(struct.pack('>%dI' % len(ftab), *ftab), 4)
         co = b.add(struct.pack('>%dI' % len(ctab), *ctab), 4)
-        po = b.add(struct.pack('>32H', *s['pal']), 4)
+        po = b.add(struct.pack('>%dH' % (16 * GUN_NPAL), *s['pal']), 4)
         table.append(struct.pack('>IHHIIIIII', to, ntiles, len(s['frames']), fo, po, co, 0, 0, 0))
     hdr['sets'] = b.add(b''.join(table), 4)
     b.data[0:32] = struct.pack('>4sIIIIIII', b'MDQ1', hdr['tiles'], STATIC_TILES, hdr['pal'],

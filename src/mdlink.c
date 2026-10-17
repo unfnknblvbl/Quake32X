@@ -109,8 +109,8 @@ static uint16_t tile_word(int plane, int v)
     if (v < MB_BORDER)
         return v;
     if (v < MB_BORDER_SHADED)
-        return (1 << 13) | (BORDER_TILE + v - MB_BORDER);
-    return (1 << 13) | (SHADE_TILE + v - MB_BORDER_SHADED);
+        return BORDER_TILE + v - MB_BORDER;     /* palette line 0, with the font */
+    return SHADE_TILE + v - MB_BORDER_SHADED;
 }
 
 static void put_cell(int plane, int col, int row, int v)
