@@ -1,6 +1,6 @@
 #!/bin/sh
 # Real-hardware estimates (sh2sim) for screen size and water settings from a
-# fixed viewpoint: tools/bench_view.sh "x,y,z,yaw,pitch" [label]
+# fixed viewpoint: tools/bench_view.sh "x,y,z,yaw,pitch" [level] (0 = E1M1)
 # Builds a benchmark ROM (in a copy of the tree) that starts at that view,
 # then sets the menu with scripted presses (START, Down, Left/Right) and
 # averages the frame rate over seconds 4-8 with the player standing still.
@@ -8,12 +8,13 @@ cd "$(dirname "$0")/.."
 POS=$1
 B=${BENCH_DIR:-${TMPDIR:-/tmp}/q32x-bench}
 rm -rf $B && mkdir -p $B/data
-cp -r Makefile src src-md tools $B/ && cp data/*.lvl data/*.json $B/data/ && ln -s "$PWD/data/pak0.pak" $B/data/pak0.pak
-touch $B/data/*.lvl
-(cd $B && make -s EXTRA_CFLAGS="-DSTART_POS=$POS" >/dev/null) || exit 1
+cp -r Makefile src src-md tools $B/ && cp data/*.json $B/data/ && ln -s "$PWD/data/pak0.pak" $B/data/pak0.pak
+make -s build/e1m1.lvl build/e1m2.lvl build/e1m3.lvl build/md_data.bin >/dev/null || exit 1
+mkdir -p $B/build && cp build/*.lvl build/md_data.bin $B/build/ && touch $B/build/*.lvl $B/build/md_data.bin
+(cd $B && make -s EXTRA_CFLAGS="-DSTART_POS=$POS -DSTART_LEVEL=${2:-0}" >/dev/null) || exit 1
 /opt/toolchains/sega/bin/sh-elf-nm -n $B/build/q32x.elf > $B/syms.txt
 press() {   # keys -> -pad args, one press every 12 vblanks from vblank 60
-    t=60; for k in $(echo "$1" | sed 's/./& /g'); do
+    t=60; for k in $(echo "$1" | sed 's/^S/SD/; s/./& /g'); do
         printf -- "-pad %d %d %s " $t $((t + 3)) $k; t=$((t + 12)); done
 }
 run() {   # label, keys

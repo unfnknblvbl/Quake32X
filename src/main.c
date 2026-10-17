@@ -285,7 +285,7 @@ static uint16_t demo_update(uint32_t now, int ticks, uint16_t pad_pressed)
 static void update_input(uint32_t *last_tick, uint16_t *oldpad)
 {
     uint32_t now = time_now();
-    int ticks = now - *last_tick;
+    int ticks = now - *last_tick, demo_ticks;
     volatile uint16_t *latch = UNCACHED(&pad_latch);
     uint16_t pad = PAD, seen, pressed;
     int analog;
@@ -309,6 +309,10 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
 #ifdef DEMO_CAMERA
     pressed = demo_update(now, ticks, pressed);    /* real time: the camera keeps pace */
 #endif
+    /* the game takes at most 6 ticks a frame (below 10 fps it slows down
+       rather than taking big steps); the attract demo keeps real time, as
+       Quake's does, since it only replays where things were */
+    demo_ticks = ticks > 60 ? 60 : ticks;
     if (ticks > 6) ticks = 6;
     if (hint_time > 0) {
         hint_time -= ticks;
@@ -323,7 +327,7 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
         menu_input(pressed);                /* the menu reads the pad itself */
     } else if (g_mode == GM_DEMO) {
         /* the attract demo plays itself; START opens the menu */
-        while (ticks-- > 0)
+        while (demo_ticks-- > 0)
             if (!pd_tick()) {
                 g_request = REQ_DEMO;       /* over: again */
                 break;
@@ -506,7 +510,7 @@ void pri_main(void)
     g_new_game();
 #ifdef START_LEVEL
     load_level(START_LEVEL);            /* test builds: another level first */
-#elif defined(DEMO_CAMERA)
+#elif defined(DEMO_CAMERA) || defined(START_POS)
     load_level(0);
 #else
     start_demo();                       /* like Quake: the demo first */

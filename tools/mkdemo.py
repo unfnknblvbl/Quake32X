@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 mkdemo.py - one of Quake's demos (a recording of what the server sent the
-client, tools/dem.py) as a compact stream the 32X plays back (src/demo.c).
+client, tools/dem.py) as a compact stream the 32X plays back (src/playdemo.c).
 
 Everything the playback needs is worked out here: the demo's model and
 sound numbers become the level blob's (MDL_, SND_: tools/mkents.py), the

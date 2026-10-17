@@ -6,12 +6,13 @@
 cd "$(dirname "$0")/.."
 B=${BENCH_DIR:-${TMPDIR:-/tmp}/q32x-bench}
 rm -rf $B && mkdir -p $B/data
-cp -r Makefile src src-md tools $B/ && cp data/*.lvl data/*.json $B/data/ && ln -s "$PWD/data/pak0.pak" $B/data/pak0.pak
-touch $B/data/*.lvl
+cp -r Makefile src src-md tools $B/ && cp data/*.json $B/data/ && ln -s "$PWD/data/pak0.pak" $B/data/pak0.pak
+make -s build/e1m1.lvl build/e1m2.lvl build/e1m3.lvl build/md_data.bin >/dev/null || exit 1
+mkdir -p $B/build && cp build/*.lvl build/md_data.bin $B/build/ && touch $B/build/*.lvl $B/build/md_data.bin
 (cd $B && make -s DEMO=bench >/dev/null) || exit 1
 /opt/toolchains/sega/bin/sh-elf-nm -n $B/build/q32x.elf > $B/syms.txt
 press() {   # keys -> -pad args, one press every 12 vblanks from vblank 30
-    t=30; for k in $(echo "$1" | sed 's/./& /g'); do
+    t=30; for k in $(echo "$1" | sed 's/^S/SD/; s/./& /g'); do
         printf -- "-pad %d %d %s " $t $((t + 3)) $k; t=$((t + 12)); done
 }
 run() {   # label, keys: average of the FPS counter once the menu is closed
