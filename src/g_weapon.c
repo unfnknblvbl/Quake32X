@@ -240,11 +240,11 @@ GCODE void g_throw_gib(int model, const fixed_t org[3], int health)
     g_relink(e);
 }
 
-/* ThrowHead: the monster itself becomes its head, which stays */
+/* ThrowHead: the monster itself becomes its head (which lies a moment) */
 GCODE void g_throw_head(ent_t *e, int model, int health)
 {
     e->type = ET_GIB;
-    e->cls = 1;                         /* a head: stays */
+    e->cls = 1;                         /* a head: goes once at rest */
     e->model = model;
     e->frame = 0;
     e->skin = 0;
@@ -445,8 +445,16 @@ static void run_gib(ent_t *e)
         g_free(e);
         return;
     }
-    if (e->onground)
+    if (e->onground) {
+        /* a head at rest teleports away, like the bodies */
+        if (e->cls == 1) {
+            if (!e->nextthink)
+                e->nextthink = level_time + CORPSE_STAY;
+            else if (level_time >= e->nextthink)
+                g_vanish(e);
+        }
         return;
+    }
     e->vel[2] -= FX(800) / 60;
     for (k = 0; k < 3; k++)
         end[k] = e->org[k] + e->vel[k] / 60;

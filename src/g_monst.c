@@ -1008,6 +1008,7 @@ GCODE void m_die(ent_t *e)
         set_anim(e, A_DIE1);
     e->type = ET_CORPSE;
     e->died = level_time;
+    e->seen = 0;                        /* not at rest yet */
     e->nextthink = level_time + 6;
     e->leaping = 0;
     keep_corpses();
@@ -1127,6 +1128,13 @@ GCODE void m_think(ent_t *e)
             walkmove(e, d > 0 ? e->yaw : e->yaw + 32768, d > 0 ? d : -d);
         if (pos + 1 < a->len)
             e->animpos++;
+        else if (e->onground) {
+            /* fallen and still: gone a moment later */
+            if (!e->seen)
+                e->seen = level_time;
+            else if (level_time - e->seen >= CORPSE_STAY)
+                g_vanish(e);
+        }
         return;
     }
 

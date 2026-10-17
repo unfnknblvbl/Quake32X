@@ -196,13 +196,16 @@ int main(int argc, char **argv)
         r_render(&rc[1], view.vh / 2, view.vh);
         overlays_draw(0, 0, 150, fr < 120);
         if (getenv("LOG")) {
-            int nm = 0;
-            for (k = 0; k < MAX_ENTS; k++) nm += ents[k].type == ET_MONSTER;
+            int nm = 0, nc = 0;
+            for (k = 0; k < MAX_ENTS; k++) {
+                nm += ents[k].type == ET_MONSTER;
+                nc += ents[k].type == ET_CORPSE || (ents[k].type == ET_GIB && ents[k].cls == 1);
+            }
             extern int bot_dbg_wp(void);
             printf("wp %d det %d ", bot_dbg_wp() & 255, (bot_dbg_wp() >> 8) - 1);
-            printf("f %d t %u pos %d %d %d yaw %d hp %d sh %d kills %d alive %d draw %d zused %d parts %d phase %d\n",
+            printf("f %d t %u pos %d %d %d yaw %d hp %d sh %d kills %d alive %d bodies %d draw %d zused %d parts %d phase %d\n",
                    fr, level_time, UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]),
-                   player.yaw * 360 / 65536, ps.health, ps.shells, ps.kills, nm, scene.ndraw, scene.zused,
+                   player.yaw * 360 / 65536, ps.health, ps.shells, ps.kills, nm, nc, scene.ndraw, scene.zused,
                    scene.nparts, dbg_phase);
         }
         if (getenv("DOORLOG")) {

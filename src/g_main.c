@@ -500,6 +500,17 @@ GCODE void g_particles(const fixed_t org[3], const fixed_t dir[3], int color, in
     }
 }
 
+/* a body that has lain for a moment teleports away, in the splash the
+ * monsters arrive with: fewer things to draw and to think about */
+GCODE void g_vanish(ent_t *e)
+{
+    fixed_t c[3];
+    c[0] = e->org[0]; c[1] = e->org[1]; c[2] = e->org[2];
+    g_free(e);
+    g_teleport_fx(c);
+    snd_start(SND_R_TELE1 + (g_rand() % 5), c, 160);
+}
+
 /* Quake's teleport splash, thinned from 896 particles to 100 */
 GCODE void g_teleport_fx(const fixed_t org[3])
 {

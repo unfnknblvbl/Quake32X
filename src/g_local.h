@@ -103,7 +103,7 @@ typedef struct ent_s {
     uint8_t  animpos, attack_state, hunting, lefty;
     uint32_t nextthink;
     uint32_t attack_finished, pain_finished, died;
-    uint32_t seen;                   /* last tick it was near or in sight */
+    uint32_t seen;                   /* last tick it was near or in sight; bodies: when it came to rest */
     int16_t  leaf;                   /* BSP leaf of org (g_relink) */
     uint8_t  light, lightdirty;      /* cached light probe for drawing */
     int16_t  owner;                  /* missiles: OWN_ or the monster that fired */
@@ -247,6 +247,8 @@ void g_damage(ent_t *e, int dmg);
 void g_hurt(ent_t *e, int dmg);
 void g_particles(const fixed_t org[3], const fixed_t dir[3], int color, int count);
 void g_teleport_fx(const fixed_t org[3]);
+void g_vanish(ent_t *e);                    /* a body teleports away */
+#define CORPSE_STAY TICKS(1)                /* how long a body lies before it goes */
 ent_t *g_spawn(void);
 void g_free(ent_t *e);
 int  g_monster_cap(void);
