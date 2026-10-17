@@ -98,6 +98,7 @@ static inline int32_t hw_div64(int64_t a, int32_t b) { return b ? sat32(a / b) :
 extern int32_t host_div_result;
 extern uint16_t host_comm0;
 #define MARS_SYS_COMM0 host_comm0
+static inline uint32_t get_vblank_count(void) { return 0; }
 #else
 static inline uint32_t get_vblank_count(void)
 {

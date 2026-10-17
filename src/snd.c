@@ -120,6 +120,13 @@ void snd_stop_all(void)
         ;
 }
 
+GCODE void snd_stop_dynamic(void)
+{
+    put_cmd(CMD_STOP_ALL, 0, 0, 0);
+    for (int k = 0; k < NSTATIC; k++)
+        st_sound[k] = CMD_SILENCE;  /* the static channels start again */
+}
+
 /* Quake's SND_Spatialize: full volume up close, silent at 1000 / att
  * units; panned by the listener's right vector. 0 if out of hearing */
 static int spatialize(const fixed_t *org, int vol, int att, int *lv, int *rv)

@@ -117,6 +117,10 @@ static void setup_light(mxform_t *m, const drawent_t *d)
     m->ambinv = 255 - amb;
     if (m->ambinv < 5) m->ambinv = 5;
     m->shade = shade;
+    if (d->mdl->flags & MF_FULLBRIGHT) {
+        m->ambinv = 40;             /* flames: bright all over */
+        m->shade = 0;
+    }
     /* Quake's light vector (-1, 0, 0) turned into the model's frame */
     m->lv[0] = -fcos(yaw) >> 2;
     m->lv[1] = fsin(yaw) >> 2;
@@ -144,12 +148,27 @@ static NOINLINE void setup_xform(mxform_t *m, const drawent_t *d)
         fixed_t col[3][3], o[3];
         const fixed_t *rows[3] = { view.right, view.down, view.fwd };
         /* model axes in the world, scaled */
+        if (d->pitch) {
+            /* tilted too (missiles along their flight): forward, left, up */
+            fixed_t sp = fsin(d->pitch), cp = fcos(d->pitch);
+            fixed_t ax[3][3];
+            ax[0][0] = fixmul(cy, cp); ax[0][1] = fixmul(sy, cp); ax[0][2] = sp;
+            ax[1][0] = -sy; ax[1][1] = cy; ax[1][2] = 0;
+            ax[2][0] = -fixmul(cy, sp); ax[2][1] = -fixmul(sy, sp); ax[2][2] = cp;
+            for (k = 0; k < 3; k++) {
+                for (r = 0; r < 3; r++)
+                    col[k][r] = fixmul(ax[k][r], md->scale[k]);
+                o[k] = d->org[k] + fixmul(ax[0][k], md->origin[0]) + fixmul(ax[1][k], md->origin[1])
+                       + fixmul(ax[2][k], md->origin[2]) - view.org[k];
+            }
+        } else {
         col[0][0] = fixmul(cy, md->scale[0]); col[0][1] = fixmul(sy, md->scale[0]); col[0][2] = 0;
         col[1][0] = -fixmul(sy, md->scale[1]); col[1][1] = fixmul(cy, md->scale[1]); col[1][2] = 0;
         col[2][0] = 0; col[2][1] = 0; col[2][2] = md->scale[2];
         o[0] = d->org[0] + fixmul(cy, md->origin[0]) - fixmul(sy, md->origin[1]) - view.org[0];
         o[1] = d->org[1] + fixmul(sy, md->origin[0]) + fixmul(cy, md->origin[1]) - view.org[1];
         o[2] = d->org[2] + md->origin[2] - view.org[2];
+        }
         for (r = 0; r < 3; r++) {
             for (k = 0; k < 3; k++)
                 m->a[r][k] = dot16(rows[r], col[k]);

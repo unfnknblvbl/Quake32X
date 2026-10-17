@@ -48,7 +48,13 @@ from anorms import ANORMS          # noqa: E402
 # rows = 2 lines); must match view_sizes in src/game.c
 SIZES = [(160, 104), (144, 96), (128, 80), (112, 72), (96, 64), (80, 56)]
 VIEW_ROWS = 104                    # 32X rows above the status bar
-WEAPONS = ['progs/v_shot.mdl', 'progs/v_shot2.mdl']
+# the view weapons, in the order of MDW_ in src/mdlink.h
+WEAPONS = ['progs/v_axe.mdl', 'progs/v_shot.mdl', 'progs/v_shot2.mdl', 'progs/v_nail.mdl',
+           'progs/v_rock.mdl']
+SCALE_FROM = 'progs/v_shot.mdl'    # the weapon whose idle frame sets the brightness
+# frames kept (the axe's second swing, frames 5-8, would not fit in VRAM
+# with the first: the game uses the first swing for both)
+WEAPON_FRAMES = {'progs/v_axe.mdl': 5}
 
 FONT_TILE = 16
 BORDER_TILE = FONT_TILE + 256
@@ -383,19 +389,17 @@ def build_sets(pak, pal, colormap, preview=None):
     """every weapon at every screen size: the frames as colour indices, each
     sprite block on one of two 15-colour palettes made for that set"""
     sets = []
-    scale = None
+    # one fixed, bright look: the shotgun's brightest parts (98th percentile
+    # of its full-size idle frame) at BRIGHT; the same scale for every
+    # weapon at every size
+    rgb, al = render_gun(load_mdl(pak[SCALE_FROM]), 0, SIZES[0][0], SIZES[0][1], pal, colormap)
+    scale = BRIGHT / max(1.0, np.percentile(rgb[al >= 0.5].max(1), 98))
+    print('weapon colour scale %.2f' % scale)
     for wi, path in enumerate(WEAPONS):
         m = load_mdl(pak[path])
-        nframes = len(m['frames'])
+        nframes = min(len(m['frames']), WEAPON_FRAMES.get(path, 99))
         for si, (vw, vh) in enumerate(SIZES):
             renders = [render_gun(m, f, vw, vh, pal, colormap) for f in range(nframes)]
-            if scale is None:
-                # one fixed, bright look: the shotgun's brightest parts (98th
-                # percentile of its full-size idle frame) at BRIGHT; the same
-                # scale for every size and for the super shotgun
-                lit = renders[0][0][renders[0][1] >= 0.5]
-                scale = BRIGHT / max(1.0, np.percentile(lit.max(1), 98))
-                print('weapon colour scale %.2f' % scale)
             renders = [(np.clip(r[0] * scale, 0, 255), r[1]) for r in renders]
             blocks = []                 # (frame, y, x, rows, cols, opaque pixels)
             for f, (rgb, al) in enumerate(renders):

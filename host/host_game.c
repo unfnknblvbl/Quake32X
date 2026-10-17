@@ -9,8 +9,10 @@
 #include <stdlib.h>
 #include "../src/g_local.h"
 #include "../src/bot.h"
+#include "../src/levels.h"
 
 int32_t host_div_result;
+int g_mode, cur_level;
 uint16_t host_comm0;
 volatile uint16_t *r_fb, *r_screen;
 static uint16_t fbmem[SCREENW * SCREENH];
@@ -110,6 +112,15 @@ int main(int argc, char **argv)
     game_init();
     scene.zbuf = zbuf_mem;
     if (getenv("CAP")) cfg.monsters = atoi(getenv("CAP"));
+    snd_init();
+    g_new_game();
+    if (getenv("GIVE")) {           /* every weapon, plenty of ammunition */
+        ps.weapons = IT_AXE | IT_SHOTGUN | IT_SUPER_SHOTGUN | IT_NAILGUN | IT_GRENADE_LAUNCHER;
+        ps.shells = 100; ps.nails = 200; ps.rockets = 100;
+        ps.weapon = atoi(getenv("GIVE")) ? atoi(getenv("GIVE")) : IT_SHOTGUN;
+        g_change_parms();
+    }
+    if (getenv("GOD")) cfg.god = 1;
     g_init();
     if (getenv("MODELTEST")) {
         /* a monster (CL_ARMY 1 / CL_DOG 2) DIST units ahead of the start,
@@ -119,15 +130,17 @@ int main(int argc, char **argv)
         e->org[0] = player.pos[0] + fixmul(fcos(player.yaw), FX(dist));
         e->org[1] = player.pos[1] + fixmul(fsin(player.yaw), FX(dist));
         e->org[2] = player.pos[2];
-        m_spawn(e, atoi(getenv("MODELTEST")), 0);
+        m_spawn(e, atoi(getenv("MODELTEST")), getenv("HUNT") != NULL);
         e->yaw = (getenv("YAW") ? atoi(getenv("YAW")) : 270) * 65536 / 360;
-        e->frame = getenv("FRAME") ? atoi(getenv("FRAME")) : 0;
-        e->nextthink = 0xFFFFFFF;
+        if (!getenv("HUNT")) {
+            e->frame = getenv("FRAME") ? atoi(getenv("FRAME")) : 0;
+            e->nextthink = 0xFFFFFFF;
+        }
         cfg.monsters = 0;
     }
 
     if (getenv("PADSCRIPT")) load_pads(getenv("PADSCRIPT"));
-    else if (!getenv("MODELTEST")) bot_start();     /* the demo bot plays */
+    else if (!getenv("MODELTEST") && !getenv("NOBOT")) bot_start();     /* the demo bot plays */
     if (getenv("MESH")) cfg.mesh = 1;
     if (getenv("START")) {          /* START="x y z yaw [pitch]": where the player begins */
         float x, y, z, a, pt = 0;
@@ -147,7 +160,7 @@ int main(int argc, char **argv)
         if (menu_active)
             menu_input(pressed);
         else
-            for (k = 0; k < tpf && !getenv("MODELTEST"); k++) {
+            for (k = 0; k < tpf && (!getenv("MODELTEST") || getenv("HUNT")); k++) {
                 if (bot_active) bot_tick(&held, &pressed);
                 else { held = map_pad(ppad); if (k == 0) pressed = map_pad(pressed); }
                 if (!g_level_done)
@@ -190,10 +203,17 @@ int main(int argc, char **argv)
                 last[k] = st;
             }
         }
+        if (g_request) {            /* the level again (one level here) */
+            if (getenv("LOG")) printf("request %d at f %d\n", g_request, fr);
+            if (g_request == REQ_NEXT_LEVEL) break;
+            g_request = 0;
+            g_init();
+            game_respawn();
+        }
         if (getenv("MLOG") && fr % atoi(getenv("MLOG")) == 0)
             for (k = 0; k < MAX_ENTS; k++) {
                 const ent_t *e = &ents[k];
-                if (e->type != ET_MONSTER && e->type != ET_CORPSE) continue;
+                if (e->type == ET_FREE || e->type == ET_ITEM) continue;
                 printf("   ent %d type %d cls %d q %d pos %d %d %d hp %d frame %d hunt %d ground %d yaw %d ideal %d\n", k, e->type, e->cls,
                        e->queue, UNITS(e->org[0]), UNITS(e->org[1]), UNITS(e->org[2]), e->health, e->frame, e->hunting,
                        e->onground, e->yaw * 360 / 65536, e->ideal_yaw * 360 / 65536);

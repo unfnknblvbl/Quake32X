@@ -9,8 +9,8 @@
 int menu_active;
 static int cursor;
 
-enum { M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_MONSTERS, M_FPS, M_MOVE, M_CONTROLS, M_ANALOG,
-       M_DEMO, M_RESUME, M_NUM };
+enum { M_NEWGAME, M_TEXTURES, M_LIGHTING, M_WATER, M_FAR, M_SIZE, M_MONSTERS, M_FPS, M_MOVE, M_CONTROLS,
+       M_ANALOG, M_DEMO, M_RESUME, M_NUM };
 
 static const char *const cap_names[NUM_MONSTER_CAPS] = {
     "OFF", "1", "2", "3", "4", "6", "8", "UNLIMITED"
@@ -289,6 +289,12 @@ void menu_input(int pressed)
         return;
     }
     switch (cursor) {
+    case M_NEWGAME:
+        if (delta == 2) {
+            g_request = REQ_NEW_GAME;   /* E1M1, from the start */
+            menu_active = 0;
+        }
+        break;
     case M_TEXTURES: cfg.textures ^= 1; break;
     case M_LIGHTING: cfg.lighting ^= 1; break;
     case M_WATER:    cfg.mesh ^= 1; break;
@@ -412,7 +418,7 @@ static void analog_draw(void)
 void menu_draw(void)
 {
     static const char *const names[M_NUM] = {
-        "Textures", "Lighting", "Water", "Draw distance", "Screen size",
+        "New game", "Textures", "Lighting", "Water", "Draw distance", "Screen size",
         "Monsters at once", "Show FPS", "Movement", "Controls...", "Analogue pad...",
         "Demo (bot plays)", "Resume"
     };
@@ -427,7 +433,7 @@ void menu_draw(void)
         analog_draw();
         return;
     }
-    centre(0, "PAUSED", 1);
+    centre(0, g_mode == GM_DEMO ? "QUAKE" : "PAUSED", 1);
     for (i = 0; i < M_NUM; i++) {
         p = buf;
         switch (i) {
@@ -463,9 +469,30 @@ void menu_draw(void)
         default: break;
         }
         *p = 0;
-        item(i, 2 + i * 2, names[i], buf);
+        item(i, 1 + i * 2 - (i > 0), names[i], buf);
     }
     centre(MD_ROWS - 2, "Up/Down select  Left/Right set", 0);
+}
+
+/* the end of the cartridge's levels (after E1M3): a closing word, in the
+ * box at columns 2-37, rows 4-21 */
+static void finale_draw(void)
+{
+    static const char *const lines[] = {
+        "As the Necropolis falls silent, the",
+        "way on into the Dimension of the",
+        "Doomed opens before you - but that",
+        "road lies beyond this cartridge.",
+        "",
+        "You have cleared the first three",
+        "levels of Episode 1.",
+    };
+    int i;
+    centre(5, "THE END", 1);
+    for (i = 0; i < (int)(sizeof(lines) / sizeof(lines[0])); i++)
+        md_text(3, 8 + i, lines[i], 0);
+    centre(17, "Thanks for playing", 1);
+    centre(19, "Press B to return to the demo", 0);
 }
 
 /* end of the level: Quake's intermission figures, in a box at columns
@@ -502,8 +529,9 @@ void overlays_draw(int win_x, int win_y, int fps10, int hint)
     int vx0 = win_x >> 2, vx1 = (win_x + view.vw) >> 2;     /* in 8x8 cells */
     int vy0 = win_y >> 2, vy1 = (win_y + view.vh) >> 2;
     int sbar = MD_ROWS - 2;
+    int finale = g_mode == GM_FINALE, demo = g_mode == GM_DEMO;
     uint32_t key = cfg.size | menu_active << 4 | menu_page() << 5 | (hint != 0) << 6
-                   | g_level_done << 7;
+                   | (g_level_done != 0) << 7 | finale << 8 | demo << 9;
     if (md_begin_back(key)) {
         int r, c;
         for (r = 0; r < MD_ROWS; r++)
@@ -515,8 +543,12 @@ void overlays_draw(int win_x, int win_y, int fps10, int hint)
                     v = MB_BORDER + ((r & 7) << 3) + (c & 7);
                 if (menu_active)
                     shade = c >= 2 && c < 38;
+                else if (finale)
+                    shade = c >= 2 && c < 38 && r >= 4 && r < 21;
                 else if (g_level_done)
                     shade = c >= 8 && c < 32 && r >= 6 && r < 17;
+                else if (demo)
+                    shade = r >= sbar - 2 && r < sbar && c >= 13 && c < 27;
                 else if (hint)
                     shade = r >= sbar - 4 && r < sbar;
                 if (shade && v == MB_NONE)
@@ -534,6 +566,10 @@ void overlays_draw(int win_x, int win_y, int fps10, int hint)
     }
     if (g_level_done)
         intermission_draw(ps.kills, ps.total_monsters, hw_div(g_level_ticks, 60), ps.secrets, ps.total_secrets);
+    if (finale && !menu_active)
+        finale_draw();
+    if (demo && !menu_active && (level_time & 63) < 44)
+        centre(sbar - 1, "PRESS START", 1);
     if (menu_active)
         menu_draw();
     if (cfg.showfps)

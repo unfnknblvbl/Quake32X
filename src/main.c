@@ -3,6 +3,7 @@
 #include "bot.h"
 #include "mdlink.h"
 #include "levels.h"
+#include "playdemo.h"
 
 extern uint8_t _bss_end[];  /* linker symbol __bss_end */
 volatile uint32_t vblank_count;
@@ -38,10 +39,11 @@ static rcpu_t rcpu[2];
 static surfcache_t *schash[2][HASHSIZE];
 static volatile int32_t slave_spin, slave_tag;
 static uint16_t pad_poll;           /* pad samples taken by the master while rendering */
-#ifdef DEMO
-static int hint_time = 0;
+static int hint_time = 0;           /* the controls, shown when a game starts */
+#ifndef DEMO
+#define HINT_TICKS (8 * 60)         /* ... for 8 seconds */
 #else
-static int hint_time = 8 * 60;      /* show the controls for the first 8 seconds */
+#define HINT_TICKS 0
 #endif
 
 /* 60 Hz time from whichever vblank counter is running: the 68000's (COMM14
@@ -278,6 +280,21 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
     }
     if (menu_active) {
         menu_input(pressed);                /* the menu reads the pad itself */
+    } else if (g_mode == GM_DEMO) {
+        /* the attract demo plays itself; START opens the menu */
+        while (ticks-- > 0)
+            if (!pd_tick()) {
+                g_request = REQ_DEMO;       /* over: again */
+                break;
+            }
+    } else if (g_mode == GM_FINALE) {
+        /* the closing screen: a button after two seconds, then the demo */
+        static uint32_t since;
+        if (!since) since = now;
+        if (now - since > TICKS(2) && (map_pad(pressed) & (ACT_JUMP | ACT_FIRE))) {
+            since = 0;
+            g_request = REQ_DEMO;
+        }
     } else {
         /* the player's buttons as actions (Controls page, or the analogue
            pad's page), or the bot's */
@@ -305,8 +322,14 @@ static void update_view(int *viewleaf)
     fixed_t eye[3];
     int leaf, yaw = player.yaw, pitch = player.pitch;
     apply_settings();
-    game_eye(eye);
-    if (g_level_done)
+    if (g_mode == GM_DEMO) {
+        pd_update();                /* the demo's things, movers and view */
+        pd_eye(eye);
+        yaw = player.yaw;
+        pitch = player.pitch;
+    } else
+        game_eye(eye);
+    if (g_level_done || g_mode == GM_FINALE)
         g_intermission_view(eye, &yaw, &pitch);
     view.time = frame_now;
     r_setup_view(eye, yaw, pitch);
@@ -321,11 +344,21 @@ static void update_view(int *viewleaf)
     snd_update();
 
     /* the view weapon: the Mega Drive draws it, the 32X skips what it hides */
-    if (!ps.dead && !cfg.fly && !g_level_done) {
-        gun.weapon = ps.weapon == IT_SUPER_SHOTGUN;
+    if (g_mode == GM_DEMO) {
+        gun.weapon = pd_gun(&gun.frame);
+        if (gun.weapon < 0)
+            gun.frame = -1;
+    } else if (!ps.dead && !cfg.fly && !g_level_done && g_mode == GM_PLAY && ps.invis_finished <= level_time) {
+        switch (ps.weapon) {
+        case IT_AXE: gun.weapon = MDW_AXE; break;
+        case IT_SUPER_SHOTGUN: gun.weapon = MDW_SUPER_SHOTGUN; break;
+        case IT_NAILGUN: gun.weapon = MDW_NAILGUN; break;
+        case IT_GRENADE_LAUNCHER: gun.weapon = MDW_GRENADE_LAUNCHER; break;
+        default: gun.weapon = MDW_SHOTGUN;
+        }
         gun.frame = ps.weaponframe;
     } else
-        gun.frame = -1;
+        gun.frame = -1;     /* (invisible: no weapon, as in Quake) */
     {
         md_cut_t cut;
 #ifdef NO_CUTOUT
@@ -358,6 +391,27 @@ static void load_level(int n)
     game_init();
 }
 
+/* the attract mode: the demo's level and the demo from the start (or, if
+ * the cartridge has none, a game) */
+static void start_demo(void)
+{
+    int n = lvl_demo();
+    bot_stop();
+    if (n < 0) {
+        g_mode = GM_PLAY;
+        g_new_game();
+        load_level(0);
+        return;
+    }
+    g_mode = GM_DEMO;
+    g_new_game();
+    load_level(n);
+    if (!pd_start()) {
+        g_mode = GM_PLAY;
+        load_level(0);
+    }
+}
+
 /* between frames: what the game asked for */
 static void handle_request(void)
 {
@@ -369,9 +423,11 @@ static void handle_request(void)
             g_change_parms();
             load_level(cur_level + 1);
         } else {
-            /* the end: a new game (the closing screen comes later) */
-            g_new_game();
-            load_level(0);
+            /* the end of the cartridge's levels: the closing screen over
+               the last level's intermission view */
+            g_mode = GM_FINALE;
+            g_level_done = 0;
+            bot_stop();
         }
         break;
     case REQ_RESTART:
@@ -379,15 +435,18 @@ static void handle_request(void)
         game_respawn();
         break;
     case REQ_NEW_GAME:
-        g_mode = GM_PLAY;
-        g_new_game();
-        load_level(0);
-        break;
     case REQ_BOT:
         g_mode = GM_PLAY;
+        bot_stop();
+        menu_active = 0;
         g_new_game();
         load_level(0);
-        bot_start();
+        hint_time = req == REQ_BOT ? 0 : HINT_TICKS;
+        if (req == REQ_BOT)
+            bot_start();
+        break;
+    case REQ_DEMO:
+        start_demo();
         break;
     }
 }
@@ -403,8 +462,10 @@ void pri_main(void)
     g_new_game();
 #ifdef START_LEVEL
     load_level(START_LEVEL);            /* test builds: another level first */
-#else
+#elif defined(DEMO_CAMERA)
     load_level(0);
+#else
+    start_demo();                       /* like Quake: the demo first */
 #endif
     r_span_init();
     r_oram_init();

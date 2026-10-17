@@ -40,6 +40,9 @@ int  md_begin_back(uint32_t key);
 void md_back(int col, int row, int v);
 void md_end_back(void);
 
+/* the view weapons (tools/mkmd.py) */
+enum { MDW_AXE, MDW_SHOTGUN, MDW_SUPER_SHOTGUN, MDW_NAILGUN, MDW_GRENADE_LAUNCHER };
+
 /* the view weapon (MDW_*; frame -1 = none), shown from the next vertical
  * blank */
 void md_gun(int weapon, int size, int frame);

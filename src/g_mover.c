@@ -1,5 +1,5 @@
-/* Doors, secret doors, plats (lifts), buttons and triggers, after id's
- * QuakeC (doors.qc, plats.qc, buttons.qc, triggers.qc, subs.qc).
+/* Doors, secret doors, plats (lifts), buttons, trains and triggers, after
+ * id's QuakeC (doors.qc, plats.qc, buttons.qc, triggers.qc, subs.qc).
  *
  * A mover is a brush model with an offset from where the map built it.
  * It moves at a constant speed between points of its path (SUB_CalcMove),
@@ -20,7 +20,8 @@ static int nstrings;
 /* what to do when a move ends or a timer fires */
 enum {
     A_NONE, A_DOOR_TOP, A_DOOR_BOTTOM, A_DOOR_DOWN, A_PLAT_TOP, A_PLAT_BOTTOM, A_PLAT_DOWN,
-    A_BTN_WAIT, A_BTN_RETURN, A_BTN_DONE, A_SEC1, A_SEC2, A_SEC3, A_SEC4, A_SEC5, A_SEC6, A_SEC_DONE
+    A_BTN_WAIT, A_BTN_RETURN, A_BTN_DONE, A_SEC1, A_SEC2, A_SEC3, A_SEC4, A_SEC5, A_SEC6, A_SEC_DONE,
+    A_TRAIN_CORNER, A_TRAIN_NEXT
 };
 
 typedef struct {
@@ -30,6 +31,8 @@ typedef struct {
     uint8_t  think_fn, dead, nomsg, shootable;
     uint32_t think;                  /* tick for think_fn, 0 none */
     uint32_t touch_finished, block_finished;
+    uint8_t  corner, unlocked;       /* trains: the corner reached; key doors: opened */
+    uint16_t pad;
 } mstate_t;
 
 typedef struct {
@@ -105,6 +108,10 @@ static void mover_sound(int m, int which)
         s = b[l->sounds & 3];
         break;
     }
+    case MV_TRAIN:
+        if (l->sounds == 1)
+            s = which == NZ_MOVE ? SND_TRAIN1 : SND_TRAIN2;
+        break;
     }
     if (s < 0)
         return;
@@ -222,6 +229,19 @@ static void secret_use(int m)
     mover_sound(m, NZ_SEC2);
 }
 
+/* train_next: on to the next path corner (a train stops for good at the
+   corner that waits -1, the last one kept) */
+static void train_next(int m)
+{
+    mstate_t *s = &ms[m];
+    if (s->corner + 1 >= lmovers[m].npos)
+        return;
+    s->corner++;
+    mover_sound(m, NZ_MOVE);
+    s->state = MS_UP;
+    calc_move(m, lmovers[m].pos[s->corner], A_TRAIN_CORNER);
+}
+
 static void mover_use(int m)
 {
     if (ms[m].dead)
@@ -234,6 +254,11 @@ static void mover_use(int m)
             plat_go_down(m);        /* a targeted plat waits at the top */
         break;
     case MV_BUTTON: button_fire(m); break;
+    case MV_TRAIN:
+        /* train_use: only a train still at its first corner starts */
+        if (ms[m].corner == 0 && !ms[m].ticks)
+            train_next(m);
+        break;
     }
 }
 
@@ -290,7 +315,14 @@ static void use_targets(int target, int killtarget, int msg, int by_player)
         for (i = 0; i < ntrigs; i++)
             if (ltrigs[i].targetname == target)
                 trigger_use(i);
+        g_use_entities(target);     /* spike shooters */
     }
+}
+
+/* SUB_UseTargets for the game's entities (a key fires its target) */
+GCODE void mv_use_targets(int target)
+{
+    use_targets(target, 0, 0, 0);
 }
 
 static void trigger_noise(int t)
@@ -391,6 +423,17 @@ static void arrive(int m, int a)
         s->shootable = l->health > 0;
         mover_sound(m, NZ_SEC3);
         break;
+    /* trains: at a corner, on to the next one a tenth of a second later */
+    case A_TRAIN_CORNER:
+        s->state = MS_TOP;
+        if (s->corner + 1 < l->npos)
+            set_think(m, 6, A_TRAIN_NEXT);
+        else
+            mover_sound(m, NZ_STOP);
+        break;
+    case A_TRAIN_NEXT:
+        train_next(m);
+        break;
     }
 }
 
@@ -406,7 +449,7 @@ static void blocked(int m, ent_t *who)
     const lmover_t *l = &lmovers[m];
     mstate_t *s = &ms[m];
     if (level_time >= s->block_finished) {
-        s->block_finished = level_time + (l->cls == MV_DOOR_SECRET ? TICKS(0.5) : 6);
+        s->block_finished = level_time + (l->cls == MV_DOOR_SECRET || l->cls == MV_TRAIN ? TICKS(0.5) : 6);
         if (who)
             g_hurt(who, l->dmg);
         else
@@ -589,7 +632,25 @@ GCODE void mv_touch_player(void)
         mstate_t *s = &ms[i];
         if (s->dead || !box_touch(lo, hi, l->mins, l->maxs, mover_off[i]))
             continue;
-        if (l->cls == MV_BUTTON && !l->health) {
+        if (l->cls == MV_DOOR && (lmovers[l->group].flags & (MVF_SILVER_KEY | MVF_GOLD_KEY))
+            && !ms[l->group].unlocked) {
+            /* door_touch: a key door opens for its key, which it takes */
+            int lead = l->group;
+            int key = lmovers[lead].flags & MVF_GOLD_KEY ? IT_KEY2 : IT_KEY1;
+            if (ps.items & key) {
+                ps.items &= ~key;
+                ms[lead].unlocked = 1;
+                door_use(lead);
+            } else if (level_time >= ms[lead].touch_finished) {
+                fixed_t c[3];
+                ms[lead].touch_finished = level_time + TICKS(2);
+                ps.msg = key == IT_KEY2 ? "You need the gold key" : "You need the silver key";
+                ps.msg_until = level_time + TICKS(2);
+                center(i, c);
+                snd_start(lvl.hdr->worldtype == 1 ? SND_RUNETRY : lvl.hdr->worldtype == 2 ? SND_BASETRY
+                          : SND_MEDTRY, c, 255);
+            }
+        } else if (l->cls == MV_BUTTON && !l->health) {
             button_fire(i);
         } else if (l->cls == MV_DOOR || l->cls == MV_DOOR_SECRET) {
             int lead = l->cls == MV_DOOR ? l->group : i;
@@ -688,6 +749,9 @@ GCODE void mv_init(void)
         if (l->cls == MV_PLAT && l->startpos == 0)
             ms[m].state = MS_UP;    /* waits at the top to be used */
         ms[m].shootable = l->health > 0;
+        /* a train with no name sets off by itself */
+        if (l->cls == MV_TRAIN && !l->targetname)
+            set_think(m, 6, A_TRAIN_NEXT);
     }
     ps.total_secrets = 0;
     for (t = 0; t < ntrigs; t++) {

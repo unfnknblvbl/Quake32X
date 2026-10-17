@@ -62,7 +62,7 @@ GCODE fixed_t g_crand(void)
 
 const lmodel_t *g_model(int i)
 {
-    return models[i];               /* NULL: not in this level */
+    return (unsigned)i < MDL_NUM ? models[i] : NULL;    /* NULL: not in this level */
 }
 
 static int is_monster_class(int c)
@@ -70,10 +70,11 @@ static int is_monster_class(int c)
     return c >= CL_ARMY && c <= CL_ZOMBIE;
 }
 
-/* the classes the spawner can bring in so far */
+/* the classes the spawner brings in (their models are in the level) */
 static int can_spawn(int c)
 {
-    return (c == CL_ARMY || c == CL_DOG) && models[c == CL_ARMY ? MDL_SOLDIER : MDL_DOG];
+    static const uint8_t mdl[] = { MDL_SOLDIER, MDL_DOG, MDL_OGRE, MDL_KNIGHT, MDL_DEMON, MDL_WIZARD, MDL_ZOMBIE };
+    return is_monster_class(c) && models[mdl[c - CL_ARMY]];
 }
 
 static uint32_t isqrt_u(uint32_t x)
@@ -115,31 +116,6 @@ GCODE uint16_t vectoyaw(fixed_t dx, fixed_t dy)
     return (uint16_t)a;
 }
 
-/* normalize a vector (16.16) */
-static void normalize(fixed_t v[3])
-{
-    int32_t a[3];
-    int64_t s;
-    uint32_t len;
-    int k, m = 0;
-    /* scale so the largest component is below 2^15 before squaring */
-    for (k = 0; k < 3; k++) {
-        a[k] = v[k];
-        m |= a[k] < 0 ? -a[k] : a[k];
-    }
-    while (m >= 0x8000) {
-        for (k = 0; k < 3; k++)
-            a[k] >>= 1;
-        m >>= 1;
-    }
-    s = (int64_t)a[0] * a[0] + (int64_t)a[1] * a[1] + (int64_t)a[2] * a[2];
-    len = isqrt_u((uint32_t)s);                   /* same scale as a */
-    if (len == 0)
-        return;
-    for (k = 0; k < 3; k++)
-        v[k] = hw_div64((int64_t)a[k] << 16, len);
-}
-
 /* ------------------------------------------------------------ entities */
 
 GCODE ent_t *g_spawn(void)
@@ -166,14 +142,14 @@ static int overlaps_player_box(const ent_t *e, fixed_t x, fixed_t y, fixed_t z)
         && dy - 16 < e->maxs[1] && dz + 32 > e->mins[2] && dz - 24 < e->maxs[2];
 }
 
-/* would the player's box at (x, y, z) run into a monster it is not
- * already touching? */
+/* would the player's box at (x, y, z) run into a monster (or a barrel) it
+ * is not already touching? */
 GCODE int g_box_blocked(fixed_t x, fixed_t y, fixed_t z)
 {
     int i;
     for (i = 0; i < MAX_ENTS; i++) {
         const ent_t *e = &ents[i];
-        if (e->type != ET_MONSTER)
+        if ((e->type != ET_MONSTER && e->type != ET_BOX) || (e->flags & EF_NOTSOLID))
             continue;
         if (overlaps_player_box(e, x, y, z) && !overlaps_player_box(e, player.pos[0], player.pos[1], player.pos[2]))
             return 1;
@@ -205,6 +181,7 @@ static void spawn_item(int idx, const lent_t *le)
     e->cls = le->cls;
     e->variant = le->variant;
     e->queue = idx;
+    e->owner = le->target;          /* items fire their target when taken */
     switch (le->cls) {
     case CL_I_HEALTH:
         e->model = le->variant & 1 ? MDL_B_BH10 : le->variant & 2 ? MDL_B_BH100 : MDL_B_BH25;
@@ -212,6 +189,24 @@ static void spawn_item(int idx, const lent_t *le)
         break;
     case CL_I_SHELLS: e->model = le->variant & 1 ? MDL_B_SHELL1 : MDL_B_SHELL0; box = 1; break;
     case CL_I_SPIKES: e->model = le->variant & 1 ? MDL_B_NAIL1 : MDL_B_NAIL0; box = 1; break;
+    case CL_I_ROCKETS: e->model = le->variant & 1 ? MDL_B_ROCK1 : MDL_B_ROCK0; box = 1; break;
+    case CL_W_GRENADELAUNCHER: e->model = MDL_G_ROCK; break;
+    case CL_I_ARTIFACT_INVISIBILITY: e->model = MDL_INVISIBL; break;
+    case CL_I_KEY1: e->model = MDL_W_S_KEY; break;
+    case CL_I_KEY2: e->model = MDL_W_G_KEY; break;
+    case CL_MISC_EXPLOBOX:
+        /* a barrel: solid, 20 points set it off */
+        e->type = ET_BOX;
+        e->model = MDL_B_EXPLOB;
+        e->health = 20;
+        e->org[0] = FX(le->org[0]);
+        e->org[1] = FX(le->org[1]);
+        e->org[2] = FX(le->org[2] + 2);
+        e->maxs[0] = e->maxs[1] = 32; e->maxs[2] = 64;
+        p[0] = e->org[0] + FX(16); p[1] = e->org[1] + FX(16); p[2] = e->org[2];
+        e->org[2] = drop_to_floor(p);
+        g_relink(e);
+        return;
     case CL_I_ARMOR1: e->model = MDL_ARMOR; e->skin = 0; break;
     case CL_I_ARMOR2: e->model = MDL_ARMOR; e->skin = 1; break;
     case CL_I_ARMORINV: e->model = MDL_ARMOR; e->skin = 2; break;
@@ -237,7 +232,10 @@ static void spawn_item(int idx, const lent_t *le)
         p[0] = e->org[0]; p[1] = e->org[1]; p[2] = e->org[2];
     }
     e->org[2] = drop_to_floor(p);
-    g_relink(e);
+    if (!models[e->model])
+        g_free(e);
+    else
+        g_relink(e);
 }
 
 static ent_t *spawn_monster(int q, int teleport)
@@ -347,6 +345,7 @@ GCODE void g_change_parms(void)
     p.armortype = ps.armortype;
     p.shells = ps.shells;
     p.nails = ps.nails;
+    p.rockets = ps.rockets;
     p.weapons = ps.weapons;
     p.weapon = ps.weapon;
     ps = p;
@@ -424,8 +423,13 @@ GCODE void g_init(void)
         case CL_AMB_SWAMP2: snd_static(SND_SWAMP2, spot, 128); break;
         case CL_L_FLUORO: snd_static(SND_FL_HUM1, spot, 128); break;
         case CL_L_FLUOROSPARK: snd_static(SND_BUZZ1, spot, 128); break;
+        case CL_TRAP_SPIKESHOOTER: break;
         default:
-            if (is_monster_class(c))
+            if (g_mode == GM_DEMO)
+                break;                  /* the demo brings its own things */
+            if (c == CL_ZOMBIE && le->variant)
+                qstate[i] = Q_DEAD;     /* a crucified zombie: scenery, left out */
+            else if (is_monster_class(c))
                 ps.total_monsters++;
             else
                 spawn_item(i, le);
@@ -450,6 +454,32 @@ GCODE int g_intermission_view(fixed_t eye[3], int *yaw, int *pitch)
 }
 
 /* ------------------------------------------------------------ effects */
+
+/* a free particle at org (its leaf worked out), or NULL */
+GCODE particle_t *g_new_particle(const fixed_t org[3])
+{
+    static int next;
+    int i;
+    for (i = 0; i < MAX_PARTICLES; i++) {
+        particle_t *p = &particles[next];
+        next = next + 1 < MAX_PARTICLES ? next + 1 : 0;
+        if ((int16_t)(p->die - (uint16_t)level_time) > 0)
+            continue;
+        p->org[0] = org[0];
+        p->org[1] = org[1];
+        p->org[2] = org[2];
+        p->leaf = r_pointleaf(org);
+        return p;
+    }
+    return NULL;
+}
+
+GCODE void g_particle_life(particle_t *p, int ticks)
+{
+    p->die = (uint16_t)(level_time + ticks);
+    if (part_until < level_time + ticks)
+        part_until = level_time + ticks;
+}
 
 GCODE void g_particles(const fixed_t org[3], const fixed_t dir[3], int color, int count)
 {
@@ -490,7 +520,7 @@ GCODE void g_teleport_fx(const fixed_t org[3])
                 p->org[0] = org[0] + FX(i + (g_rand() & 3));
                 p->org[1] = org[1] + FX(j + (g_rand() & 3));
                 p->org[2] = org[2] + FX(k + (g_rand() & 3));
-                normalize(d);
+                g_normalize(d);
                 vel = 50 + (g_rand() & 63);
                 p->vel[0] = d[0] * vel;
                 p->vel[1] = d[1] * vel;
@@ -524,11 +554,12 @@ static void run_particles(void)
 
 /* ------------------------------------------------------------ damage */
 
+/* T_Damage on the player: armour takes its share; a red flash */
 GCODE void g_damage_player(int dmg, const fixed_t *from)
 {
     int save, take;
     (void)from;
-    if (ps.dead)
+    if (ps.dead || dmg <= 0)
         return;
     if (cfg.god)
         dmg = (dmg + 3) >> 2;            /* the demo bot: quarter damage */
@@ -540,11 +571,16 @@ GCODE void g_damage_player(int dmg, const fixed_t *from)
         ps.armortype = 0;
     take = dmg - save;
     ps.health -= take;
+    g_flash(FLASH_DAMAGE, 3 * (save + take) + 20);
     if (ps.health <= 0) {
         ps.health = 0;
         ps.dead = 1;
         ps.died = level_time;
-        snd_start(SND_PLAYER_DEATH1, NULL, 255);
+        ps.weaponframe = 0;
+        if (ps.health < -40)
+            snd_start(SND_PLAYER_UDEATH, NULL, 255);
+        else
+            snd_start(ps.waterlevel >= 3 ? SND_PLAYER_GASP2 : SND_PLAYER_DEATH1 + (g_rand() & 1), NULL, 255);
         return;
     }
     if (level_time >= ps.pain_finished) {
@@ -553,199 +589,50 @@ GCODE void g_damage_player(int dmg, const fixed_t *from)
     }
 }
 
-/* damage from the world (crushing doors): no Quad Damage */
+static void killed(ent_t *e)
+{
+    ps.kills++;
+    if (e->queue >= 0)
+        qstate[e->queue] = Q_DEAD;
+    m_die(e);
+}
+
+/* damage from the world, traps and other monsters: no Quad Damage */
 GCODE void g_hurt(ent_t *e, int dmg)
 {
-    if (e->type != ET_MONSTER || e->health <= 0)
+    if (e->type == ET_BOX) {
+        g_box_damage(e, dmg);
+        return;
+    }
+    if (e->type != ET_MONSTER || e->health <= 0 || (e->flags & EF_NOTSOLID))
         return;
     e->health -= dmg;
     if (e->health <= 0) {
-        m_die(e);
-        ps.kills++;
-        if (e->queue >= 0)
-            qstate[e->queue] = Q_DEAD;
+        killed(e);
         return;
     }
     m_pain(e, dmg);
 }
 
+/* damage the player did */
 GCODE void g_damage(ent_t *e, int dmg)
 {
-    if (e->type != ET_MONSTER || e->health <= 0)
-        return;
     if (ps.quad_finished > level_time)
         dmg *= 4;
-    e->health -= dmg;
-    if (e->health <= 0) {
-        m_die(e);
-        ps.kills++;
-        if (e->queue >= 0)
-            qstate[e->queue] = Q_DEAD;
-        return;
-    }
-    m_pain(e, dmg);
+    g_hurt(e, dmg);
 }
 
 /* ------------------------------------------------------------ the player */
 
-#define PLAYER_EYE 22
-
-static void eye_pos(fixed_t e[3])
+/* the palette flashes of damage and bonuses (Quake's cshifts) */
+GCODE void g_flash(int type, int amount)
 {
-    e[0] = player.pos[0];
-    e[1] = player.pos[1];
-    e[2] = player.pos[2] + FX(PLAYER_EYE);
-}
-
-static void view_vectors(fixed_t fwd[3], fixed_t right[3], fixed_t up[3])
-{
-    fixed_t sy = fsin(player.yaw), cy = fcos(player.yaw);
-    fixed_t sp = fsin(player.pitch), cp = fcos(player.pitch);
-    fwd[0] = fixmul(cy, cp); fwd[1] = fixmul(sy, cp); fwd[2] = -sp;
-    right[0] = sy; right[1] = -cy; right[2] = 0;
-    up[0] = fixmul(cy, sp); up[1] = fixmul(sy, sp); up[2] = cp;
-}
-
-/* PF_aim: Quake's vertical auto-aim. If a monster is within about 22
- * degrees of the crosshair and in sight, the shot is tilted up or down to
- * its centre (the horizontal aim is the player's own) */
-static void aim(const fixed_t src[3], fixed_t fwd[3])
-{
-    int i, k, best = -1;
-    fixed_t bestdot = 0xEE14;                   /* sv_aim 0.93 */
-    for (i = 0; i < MAX_ENTS; i++) {
-        const ent_t *e = &ents[i];
-        fixed_t c[3], d[3], dt;
-        trace_t tr;
-        if (e->type != ET_MONSTER || e->health <= 0)
-            continue;
-        for (k = 0; k < 3; k++) {
-            c[k] = e->org[k] + FX(e->mins[k] + e->maxs[k]) / 2;
-            d[k] = c[k] - src[k];
-        }
-        if (vlen_units(c, src) > 2048)
-            continue;
-        normalize(d);
-        dt = dot16(d, fwd);
-        if (dt < bestdot)
-            continue;
-        g_trace(0, src, c, &tr);
-        if (tr.frac < 0x10000)
-            continue;
-        bestdot = dt;
-        best = i;
+    if (amount > 150) amount = 150;
+    if (type == FLASH_DAMAGE || amount >= ps.flash || ps.flash_type == FLASH_BONUS) {
+        if (type != ps.flash_type || amount > ps.flash)
+            ps.flash = amount;
+        ps.flash_type = type;
     }
-    if (best >= 0) {
-        const ent_t *e = &ents[best];
-        fixed_t d[3], dist;
-        for (k = 0; k < 3; k++)
-            d[k] = e->org[k] - player.pos[k];
-        dist = dot16(d, fwd);
-        fwd[0] = fixmul(fwd[0], dist);
-        fwd[1] = fixmul(fwd[1], dist);
-        fwd[2] = d[2];
-        normalize(fwd);
-    }
-}
-
-/* would a shot now (straight down the auto-aimed line) hit this monster
- * before a wall? (the demo bot only fires when it would) */
-GCODE int g_shot_would_hit(const ent_t *e)
-{
-    fixed_t src[3], fwd[3], right[3], up[3], end[3], mn[3], mx[3], t;
-    trace_t tr;
-    int k;
-    eye_pos(src);
-    view_vectors(fwd, right, up);
-    aim(src, fwd);
-    for (k = 0; k < 3; k++) {
-        end[k] = src[k] + fwd[k] * 2048;
-        mn[k] = e->org[k] + FX(e->mins[k]);
-        mx[k] = e->org[k] + FX(e->maxs[k]);
-    }
-    g_trace(0, src, end, &tr);
-    return g_ray_box(src, fwd, tr.frac * 2048, mn, mx, &t);
-}
-
-/* FireBullets: shotgun pellets against the world and the monsters */
-static void fire_bullets(int count, fixed_t sx, fixed_t sy_)
-{
-    fixed_t src[3], fwd[3], right[3], up[3];
-    int16_t hits[MAX_ENTS];
-    int i, k, n;
-    memset(hits, 0, sizeof(hits));
-    eye_pos(src);
-    view_vectors(fwd, right, up);
-    aim(src, fwd);
-    for (n = 0; n < count; n++) {
-        fixed_t d[3], end[3], wd, best;
-        ent_t *hit = NULL;
-        trace_t tr;
-        fixed_t cr = fixmul(g_crand(), sx), cu = fixmul(g_crand(), sy_);
-        for (k = 0; k < 3; k++)
-            d[k] = fwd[k] + fixmul(cr, right[k]) + fixmul(cu, up[k]);
-        normalize(d);
-        for (k = 0; k < 3; k++)
-            end[k] = src[k] + d[k] * 2048;
-        g_trace(0, src, end, &tr);
-        wd = tr.frac * 2048;                        /* units, 16.16 */
-        best = wd;
-        mv_shoot_triggers(src, d, wd);              /* shootable switches */
-        for (i = 0; i < MAX_ENTS; i++) {
-            ent_t *e = &ents[i];
-            fixed_t mn[3], mx[3], t;
-            if (e->type != ET_MONSTER || e->health <= 0)
-                continue;
-            for (k = 0; k < 3; k++) {
-                mn[k] = e->org[k] + FX(e->mins[k]);
-                mx[k] = e->org[k] + FX(e->maxs[k]);
-            }
-            if (g_ray_box(src, d, best, mn, mx, &t) && t < best) {
-                best = t;
-                hit = e;
-            }
-        }
-        {
-            fixed_t at[3];
-            for (k = 0; k < 3; k++)
-                at[k] = src[k] + fixmul(d[k], best - FX(4));
-            if (hit) {
-                hits[hit - ents] += 4;
-                g_particles(at, NULL, 73, 6);           /* blood */
-            } else if (tr.frac < 0x10000) {
-                g_particles(at, NULL, 0, 4);            /* puff */
-                if (tr.mover >= 0)
-                    mv_damage(tr.mover, 4);             /* secret doors open when shot */
-            }
-        }
-    }
-    for (i = 0; i < MAX_ENTS; i++)
-        if (hits[i])
-            g_damage(&ents[i], hits[i]);
-}
-
-static void player_attack(void)
-{
-    int quad = ps.quad_finished > level_time;
-    if (ps.weapon == IT_SUPER_SHOTGUN && ps.shells < 2)
-        ps.weapon = IT_SHOTGUN;
-    if (ps.shells < 1)
-        return;
-    if (ps.weapon == IT_SUPER_SHOTGUN) {
-        ps.shells -= 2;
-        snd_start(SND_SHOTGN2, NULL, 255);
-        fire_bullets(14, 0x23D7, 0x147A);          /* spread 0.14, 0.08 */
-        ps.attack_finished = level_time + TICKS(0.7);
-    } else {
-        ps.shells -= 1;
-        snd_start(SND_GUNCOCK, NULL, 255);
-        fire_bullets(6, 0xA3D, 0xA3D);             /* spread 0.04 */
-        ps.attack_finished = level_time + TICKS(0.5);
-    }
-    if (quad)
-        snd_start(SND_DAMAGE3, NULL, 255);
-    ps.weaponframe = 1;
-    ps.weapon_tick = level_time;
 }
 
 static void message(const char *m)
@@ -754,13 +641,23 @@ static void message(const char *m)
     ps.msg_until = level_time + TICKS(2);
 }
 
+/* items.qc's ammo_touch: if the player held his best weapon, he gets the
+   best one again */
+static void ammo_taken(int was_best)
+{
+    if (was_best && ps.weapon != g_best_weapon()) {
+        ps.weapon = g_best_weapon();
+        ps.weaponframe = 0;
+    }
+}
+
 /* item pickups (items.qc) */
 static void touch_items(void)
 {
     int i;
     for (i = 0; i < MAX_ENTS; i++) {
         ent_t *e = &ents[i];
-        int taken = 1, snd = SND_LOCK4;
+        int taken = 1, snd = SND_LOCK4, best = ps.weapon == g_best_weapon();
         int dx, dy, dz;
         if (e->type != ET_ITEM)
             continue;
@@ -793,12 +690,21 @@ static void touch_items(void)
             ps.shells += e->variant & 1 ? 40 : 20;
             if (ps.shells > 100) ps.shells = 100;
             message("You got the shells");
+            ammo_taken(best);
             break;
         case CL_I_SPIKES:
             if (ps.nails >= 200) { taken = 0; break; }
             ps.nails += e->variant & 1 ? 50 : 25;
             if (ps.nails > 200) ps.nails = 200;
             message("You got the nails");
+            ammo_taken(best);
+            break;
+        case CL_I_ROCKETS:
+            if (ps.rockets >= 100) { taken = 0; break; }
+            ps.rockets += e->variant & 1 ? 10 : 5;
+            if (ps.rockets > 100) ps.rockets = 100;
+            message("You got the rockets");
+            ammo_taken(best);
             break;
         case CL_I_ARMOR1: case CL_I_ARMOR2: case CL_I_ARMORINV: {
             int type = e->cls == CL_I_ARMOR1 ? 30 : e->cls == CL_I_ARMOR2 ? 60 : 80;
@@ -820,10 +726,19 @@ static void touch_items(void)
             break;
         case CL_W_NAILGUN:
             ps.weapons |= IT_NAILGUN;
+            ps.weapon = IT_NAILGUN;
             ps.nails += 30;
             if (ps.nails > 200) ps.nails = 200;
             snd = SND_PKUP;
             message("You got the nailgun");
+            break;
+        case CL_W_GRENADELAUNCHER:
+            ps.weapons |= IT_GRENADE_LAUNCHER;
+            ps.weapon = IT_GRENADE_LAUNCHER;
+            ps.rockets += 5;
+            if (ps.rockets > 100) ps.rockets = 100;
+            snd = SND_PKUP;
+            message("You got the Grenade Launcher");
             break;
         case CL_I_ARTIFACT_SUPER_DAMAGE:
             ps.quad_finished = level_time + TICKS(30);
@@ -832,22 +747,117 @@ static void touch_items(void)
             break;
         case CL_I_ARTIFACT_ENVIROSUIT:
             ps.suit_finished = level_time + TICKS(30);
+            ps.air_finished = level_time + TICKS(12);
             snd = SND_SUIT;
             message("You got the Biosuit");
             break;
+        case CL_I_ARTIFACT_INVISIBILITY:
+            ps.invis_finished = level_time + TICKS(30);
+            snd = SND_INV1;
+            message("You got the Ring of Shadows");
+            break;
+        case CL_I_KEY1: case CL_I_KEY2:
+            ps.items |= e->cls == CL_I_KEY1 ? IT_KEY1 : IT_KEY2;
+            snd = e->variant == 1 ? SND_RUNEKEY : SND_MEDKEY;
+            message(e->cls == CL_I_KEY1 ? "You got the silver key" : "You got the gold key");
+            break;
         case CL_BACKPACK:
-            ps.shells += 5;
-            if (ps.shells > 100) ps.shells = 100;
-            message("You get 5 shells");
+            if (e->variant) {
+                ps.rockets += 2;
+                if (ps.rockets > 100) ps.rockets = 100;
+                message("You get 2 rockets");
+            } else {
+                ps.shells += 5;
+                if (ps.shells > 100) ps.shells = 100;
+                message("You get 5 shells");
+            }
+            ammo_taken(best);
             break;
         default:
             taken = 0;
         }
         if (taken) {
+            int target = e->owner;
             snd_start(snd, NULL, 255);
+            g_flash(FLASH_BONUS, 50);
             ps.items_got++;
             g_free(e);
+            if (target > 0)
+                mv_use_targets(target);
         }
+    }
+}
+
+/* powerups running out (CheckPowerups) */
+static void powerups(void)
+{
+    static const struct { uint8_t snd; const char *msg; } fade[3] = {
+        { SND_DAMAGE2, "Quad Damage is wearing off" },
+        { SND_SUIT2, "Air supply in Biosuit expiring" },
+        { SND_INV2, "Ring of Shadows magic is fading" },
+    };
+    uint32_t *t[3];
+    int k;
+    t[0] = &ps.quad_finished;
+    t[1] = &ps.suit_finished;
+    t[2] = &ps.invis_finished;
+    for (k = 0; k < 3; k++)
+        if (*t[k] && *t[k] - level_time == TICKS(3)) {
+            snd_start(fade[k].snd, NULL, 255);
+            message(fade[k].msg);
+        }
+    if (ps.invis_finished > level_time && (level_time & 127) == 0 && (g_rand() & 1))
+        snd_play(SND_INV3, NULL, 128, ATTN_IDLE);
+}
+
+/* WaterMove: drowning, and slime and lava burns */
+static void water(void)
+{
+    fixed_t p[3];
+    int c, lvl_ = 0, type = 0;
+    p[0] = player.pos[0];
+    p[1] = player.pos[1];
+    p[2] = player.pos[2] - FX(23);
+    c = g_contents(0, p);
+    if (c <= CONTENTS_WATER && c >= CONTENTS_LAVA) {
+        type = c;
+        lvl_ = 1;
+        p[2] = player.pos[2] + FX(4);
+        if (g_contents(0, p) == c) {
+            lvl_ = 2;
+            p[2] = player.pos[2] + FX(22);
+            if (g_contents(0, p) == c)
+                lvl_ = 3;
+        }
+    }
+    if (lvl_ && !ps.waterlevel)
+        snd_start(type == CONTENTS_LAVA ? SND_PLAYER_LBURN1 : type == CONTENTS_SLIME ? SND_PLAYER_SLIMBRN2
+                  : SND_PLAYER_INH2O, NULL, 255);
+    else if (!lvl_ && ps.waterlevel)
+        snd_start(SND_OUTWATER, NULL, 255);
+    ps.waterlevel = lvl_;
+    ps.watertype = -type;
+    /* air */
+    if (lvl_ < 3 || ps.suit_finished > level_time) {
+        if (lvl_ < 3 && ps.air_finished && ps.air_finished < level_time + TICKS(9))
+            snd_start(SND_PLAYER_GASP2, NULL, 255);
+        ps.air_finished = level_time + TICKS(12);
+        ps.drown_dmg = 2;
+    } else if (ps.air_finished < level_time && level_time >= ps.pain_finished) {
+        ps.drown_dmg += 2;
+        if (ps.drown_dmg > 15) ps.drown_dmg = 10;
+        snd_start(SND_PLAYER_DROWN1, NULL, 255);
+        g_damage_player(ps.drown_dmg, NULL);
+        ps.pain_finished = level_time + TICKS(1);
+    }
+    if (!lvl_ || level_time < ps.dmg_time)
+        return;
+    if (type == CONTENTS_LAVA) {
+        ps.dmg_time = level_time + (ps.suit_finished > level_time ? TICKS(1) : TICKS(0.2));
+        g_damage_player(10 * lvl_, NULL);
+    } else if (type == CONTENTS_SLIME && ps.suit_finished <= level_time) {
+        ps.dmg_time = level_time + TICKS(1);
+        g_damage_player(4 * lvl_, NULL);
     }
 }
 
@@ -879,6 +889,8 @@ static void check_exit(void)
             && dy - 16 < l->half[1] && dz + 32 > -l->half[2] && dz - 24 < l->half[2]) {
             g_level_done = 1;
             g_level_ticks = level_time;
+            ps.weaponframe = 0;
+            snd_stop_dynamic();
         }
     }
 }
@@ -893,6 +905,8 @@ GCODE void g_tick(int buttons, int pressed)
         return;
     }
     level_time++;
+    if (ps.flash)
+        ps.flash = ps.flash > 3 ? ps.flash - 3 : 0;
 
     if (ps.dead) {
         /* respawn at the start after two seconds and a button */
@@ -901,46 +915,39 @@ GCODE void g_tick(int buttons, int pressed)
             return;
         }
     } else {
-        if ((pressed & ACT_WEAPON)
-            || (!cfg.bind[BIND_WEAPON] && (pressed & ACT_FIRE) && (buttons & ACT_STRAFE))) {
-            /* next weapon: its own button, or strafe + fire */
-            if (ps.weapon == IT_SHOTGUN && (ps.weapons & IT_SUPER_SHOTGUN) && ps.shells >= 2)
-                ps.weapon = IT_SUPER_SHOTGUN;
-            else
-                ps.weapon = IT_SHOTGUN;
-        } else if ((buttons & ACT_FIRE) && !(!cfg.bind[BIND_WEAPON] && (buttons & ACT_STRAFE))
-                   && level_time >= ps.attack_finished
-                   && !cfg.fly) {
-            player_attack();
-        }
+        g_weapon_tick(buttons, pressed);
         touch_items();
         mv_touch_player();
         check_exit();
+        powerups();
+        if ((level_time & 3) == 0)
+            water();
     }
     mv_tick();
-    if (ps.weaponframe && level_time - ps.weapon_tick >= 6) {
-        ps.weapon_tick = level_time;
-        if (++ps.weaponframe > 6)
-            ps.weaponframe = 0;
-    }
 
     /* monsters think at 10 Hz, spread over the six ticks */
     for (i = 0; i < MAX_ENTS; i++) {
         ent_t *e = &ents[i];
-        if (e->type != ET_MONSTER && e->type != ET_CORPSE)
-            continue;
-        m_physics(e);
-        if (e->type == ET_MONSTER && level_time >= e->nextthink) {
-            m_think(e);
-            g_relink(e);
-            mv_touch_monster(e);
-        } else if (e->type == ET_CORPSE && level_time >= e->nextthink) {
-            m_think(e);
-            g_relink(e);
-        } else if (!e->onground)
-            g_relink(e);            /* falling or leaping */
-        if (e->type == ET_MONSTER && ((level_time + i) & 31) == 0)
-            recall_check(e);
+        switch (e->type) {
+        case ET_MONSTER:
+        case ET_CORPSE:
+            m_physics(e);
+            if (level_time >= e->nextthink) {
+                m_think(e);
+                g_relink(e);
+                if (e->type == ET_MONSTER)
+                    mv_touch_monster(e);
+            } else if (!e->onground)
+                g_relink(e);            /* falling or leaping */
+            if (e->type == ET_MONSTER && ((level_time + i) & 31) == 0)
+                recall_check(e);
+            break;
+        case ET_MISSILE:
+        case ET_GIB:
+        case ET_BOX:
+            g_run_thing(e);
+            break;
+        }
     }
     if ((level_time % 6) == 3)
         spawner();
@@ -1033,37 +1040,60 @@ static int layout_zrows(void)
     return used;
 }
 
+/* a model to draw this frame: into the list, or in place of the farthest
+ * one when the list is full */
+static int ndraw;
+
+static void add_draw(const lmodel_t *m, int frame, int skin, const fixed_t org[3], uint16_t yaw,
+                     uint16_t pitch, int light)
+{
+    drawent_t *d;
+    int16_t rect[4];
+    int dist, i;
+    if (!model_rect(m, frame, org, yaw, rect, &dist))
+        return;
+    if (ndraw < MAX_DRAW) {
+        d = &scene.draw[ndraw++];
+    } else {
+        d = &scene.draw[0];
+        for (i = 1; i < MAX_DRAW; i++)
+            if (scene.draw[i].dist > d->dist)
+                d = &scene.draw[i];
+        if (d->dist <= dist)
+            return;
+    }
+    d->mdl = m;
+    d->frame = frame;
+    d->skin = skin;
+    d->org[0] = org[0];
+    d->org[1] = org[1];
+    d->org[2] = org[2];
+    d->yaw = yaw;
+    d->pitch = pitch;
+    d->light = (m->flags & MF_FULLBRIGHT) ? 0 : light;
+    d->mode = DM_DEPTH;
+    d->dist = dist;
+    for (i = 0; i < 4; i++)
+        d->rect[i] = rect[i];
+}
+
 /* drawables and depth-buffered regions for this frame (master, before GO) */
 GCODE void g_build_scene(void)
 {
-    int i, n = 0;
+    int i, n;
     scene.ndraw = 0;
+    ndraw = 0;
     mv_render_state();
     for (i = 0; i < MAX_ENTS; i++) {
         ent_t *e = &ents[i];
-        drawent_t *d;
         const lmodel_t *m;
-        int dist;
         uint16_t yaw;
-        if (e->type == ET_FREE || n >= MAX_DRAW - 1)
-            continue;
-        if (!LEAF_VISIBLE(e->leaf))
+        if (e->type == ET_FREE || !LEAF_VISIBLE(e->leaf))
             continue;
         m = models[e->model];
         if (!m)
             continue;
         yaw = (m->flags & MF_ROTATE) ? (uint16_t)(level_time * 455 / 2) : e->yaw;
-        d = &scene.draw[n];
-        if (!model_rect(m, e->frame, e->org, yaw, d->rect, &dist))
-            continue;
-        d->mdl = m;
-        d->frame = e->frame;
-        d->skin = e->skin;
-        d->org[0] = e->org[0];
-        d->org[1] = e->org[1];
-        d->org[2] = e->org[2];
-        d->yaw = yaw;
-        d->pitch = 0;
         if (e->lightdirty) {
             fixed_t c[3];
             c[0] = e->org[0];
@@ -1072,33 +1102,13 @@ GCODE void g_build_scene(void)
             e->light = g_light_point(c);
             e->lightdirty = 0;
         }
-        d->light = e->light;
-        d->mode = DM_DEPTH;
-        d->dist = dist;
-        n++;
+        add_draw(m, e->frame, e->skin, e->org, yaw, e->type == ET_MISSILE ? e->pitch : 0, e->light);
     }
     /* torches and flames */
-    for (i = 0; i < nstatics && n < MAX_DRAW - 1; i++) {
-        drawent_t *d = &scene.draw[n];
-        const lmodel_t *m = models[statics[i].model];
-        int dist;
-        if (!LEAF_VISIBLE(statics[i].leaf))
-            continue;
-        if (!model_rect(m, statics[i].frame, statics[i].org, statics[i].yaw, d->rect, &dist))
-            continue;
-        d->mdl = m;
-        d->frame = statics[i].frame;
-        d->skin = 0;
-        d->org[0] = statics[i].org[0];
-        d->org[1] = statics[i].org[1];
-        d->org[2] = statics[i].org[2];
-        d->yaw = statics[i].yaw;
-        d->pitch = 0;
-        d->light = 0;
-        d->mode = DM_DEPTH;
-        d->dist = dist;
-        n++;
-    }
+    for (i = 0; i < nstatics; i++)
+        if (LEAF_VISIBLE(statics[i].leaf))
+            add_draw(models[statics[i].model], statics[i].frame, 0, statics[i].org, statics[i].yaw, 0, 0);
+    n = ndraw;
     /* depth for as many as fit; the biggest (nearest) on screen are drawn
        back to front without it */
     for (;;) {
@@ -1171,8 +1181,8 @@ static char *put_hi(char *p, const char *s)
     return p;
 }
 
-/* the status bar line: health, armour, ammo and kills, or a pickup
- * message; returns 1 to draw it highlighted */
+/* the status bar line: health, armour, the weapon's ammunition, keys and
+ * kills, or a pickup message; returns 1 to draw it highlighted */
 GCODE int g_hud_text(char *buf)
 {
     char *p = buf;
@@ -1190,8 +1200,14 @@ GCODE int g_hud_text(char *buf)
     p = put_int(p, ps.health);
     p = put_hi(p, " ARMOR");
     p = put_int(p, ps.armor);
-    p = put_hi(p, " SHELLS");
-    p = put_int(p, ps.shells);
+    switch (ps.weapon) {
+    case IT_SHOTGUN: case IT_SUPER_SHOTGUN: p = put_hi(p, " SHELLS"); p = put_int(p, ps.shells); break;
+    case IT_NAILGUN: p = put_hi(p, " NAILS"); p = put_int(p, ps.nails); break;
+    case IT_GRENADE_LAUNCHER: p = put_hi(p, " ROCKETS"); p = put_int(p, ps.rockets); break;
+    default: p = put_hi(p, " AXE"); break;
+    }
+    if (ps.items & IT_KEY1) { *p++ = ' '; *p++ = (char)('S' | 0x80); }
+    if (ps.items & IT_KEY2) { *p++ = ' '; *p++ = (char)('G' | 0x80); }
     p = put_hi(p, " KILLS");
     p = put_int(p, ps.kills);
     *p++ = '/';

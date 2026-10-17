@@ -32,8 +32,8 @@ SECTIONS
         __sdram_start = .;
         KEEP(*(.vectors))
         *(.text.hot .text.hot.*)
-        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o) .text.*)
-        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o) .rodata.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o *g_weapon.o *playdemo.o) .text EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o *g_weapon.o *playdemo.o) .text.*)
+        *(EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o *g_weapon.o *playdemo.o) .rodata EXCLUDE_FILE(*g_main.o *g_monst.o *g_mover.o *bot.o *menu.o *game.o *mdlink.o *tables.o *level.o *g_weapon.o *playdemo.o) .rodata.*)
         *(.data .data.*)
         *(.sdata .sdata.*)
         . = ALIGN(16);
@@ -55,6 +55,8 @@ SECTIONS
         *mdlink.o(.text .text.* .rodata .rodata.*)
         *tables.o(.text .text.* .rodata .rodata.*)
         *level.o(.text .text.* .rodata .rodata.*)
+        *g_weapon.o(.text .text.* .rodata .rodata.*)
+        *playdemo.o(.text .text.* .rodata .rodata.*)
         . = ALIGN(16);
     } > rom
 

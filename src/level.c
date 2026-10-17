@@ -42,6 +42,16 @@ GCODE const char *lvl_file(int n)
     return level_dir.lv[n].name;
 }
 
+/* the level whose blob has the attract demo, -1 none */
+GCODE int lvl_demo(void)
+{
+    int i;
+    for (i = 0; i < (int)level_dir.count; i++)
+        if (level_dir.lv[i].flags & 1)
+            return i;
+    return -1;
+}
+
 /* the level's pages into the window: the 68000 writes the mapper; when it
  * has, the master's cache forgets what it held of the old pages (the
  * slave's does at the start of its next frame) */

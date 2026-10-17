@@ -76,7 +76,16 @@ typedef struct {
 
 /* ------------------------------------------------------------------ entities */
 
-enum { ET_FREE, ET_ITEM, ET_MONSTER, ET_CORPSE };
+enum { ET_FREE, ET_ITEM, ET_MONSTER, ET_CORPSE, ET_MISSILE, ET_GIB, ET_BOX };
+
+/* missiles (ent_t cls for ET_MISSILE) */
+enum { MK_NAIL, MK_TRAPSPIKE, MK_GRENADE, MK_OGRE_GRENADE, MK_WIZSPIT, MK_ZOMGIB, MK_NUM };
+
+/* who fired a missile (ent_t owner): an ents index, or */
+#define OWN_PLAYER  (-1)
+#define OWN_WORLD   (-2)
+
+#define EF_NOTSOLID 1                /* (ent_t flags) a zombie on the ground: not hit */
 
 struct anim_s;
 
@@ -98,34 +107,51 @@ typedef struct ent_s {
     uint32_t seen;                   /* last tick it was near or in sight */
     int16_t  leaf;                   /* BSP leaf of org (g_relink) */
     uint8_t  light, lightdirty;      /* cached light probe for drawing */
+    int16_t  owner;                  /* missiles: OWN_ or the monster that fired */
+    uint16_t pitch;                  /* missiles: drawn along their flight */
+    uint8_t  inpain, flags;          /* zombies' pain state; EF_ */
+    uint16_t pad;
 } ent_t;
 
-#define MAX_ENTS     72
+#define MAX_ENTS     112
 #define MAX_CORPSES  4               /* older bodies are removed */
+#define MAX_GIBS     9
 
 /* attack states (as in QuakeC) */
 enum { AS_STRAIGHT, AS_SLIDING, AS_MELEE, AS_MISSILE };
 
 /* ------------------------------------------------------------------ player */
 
+/* the player's weapons (Quake's IT_ bits) */
 #define IT_SHOTGUN      1
 #define IT_SUPER_SHOTGUN 2
 #define IT_NAILGUN      4
+#define IT_GRENADE_LAUNCHER 16
+#define IT_AXE          4096
+/* ... and keys (pstate_t items) */
+#define IT_KEY1         1            /* silver */
+#define IT_KEY2         2            /* gold */
 
 typedef struct {
     int16_t  health, armor;
     int16_t  armortype;              /* x100: 30, 60, 80 */
-    int16_t  shells, nails;
-    uint8_t  weapons, weapon;        /* bitmask, current IT_ */
-    uint8_t  weaponframe, dead;
+    int16_t  shells, nails, rockets;
+    uint16_t weapons, weapon;        /* IT_ bitmask, current IT_ */
+    uint8_t  weaponframe, dead, items, nailside;
     uint32_t attack_finished, weapon_tick;
-    uint32_t quad_finished, suit_finished;
+    uint32_t quad_finished, suit_finished, invis_finished;
     uint32_t pain_finished, died;
+    uint32_t air_finished, dmg_time; /* drowning, slime and lava */
+    int16_t  drown_dmg;
+    uint8_t  waterlevel, watertype;  /* 0 dry .. 3 eyes under; CONTENTS_ (negated) */
+    uint8_t  flash, flash_type;      /* palette flash: strength, FLASH_ */
     int16_t  kills, total_monsters, items_got;
     int16_t  secrets, total_secrets;
     const char *msg;
     uint32_t msg_until;
 } pstate_t;
+
+enum { FLASH_DAMAGE, FLASH_BONUS };
 
 /* ------------------------------------------------------------------ particles */
 
@@ -160,7 +186,7 @@ typedef struct {
  * front over everything. DM_GUN: the view weapon, sorted, drawn last. */
 enum { DM_DEPTH, DM_SORTED, DM_GUN };
 
-#define MAX_DRAW 24
+#define MAX_DRAW 28
 
 typedef struct {
     int16_t x0, x1;                  /* depth-buffered interval of this row */
@@ -186,7 +212,26 @@ extern uint32_t level_time;
 extern const lent_t *lents;
 extern int nlents;
 
+/* g_weapon.c */
+fixed_t g_normalize(fixed_t v[3]);
+void g_view_vectors(fixed_t fwd[3], fixed_t right[3], fixed_t up[3]);
+void g_aim(const fixed_t src[3], fixed_t fwd[3]);
+void g_burst(const fixed_t org[3], int color, int count, int speed, int life);
+void g_explosion(const fixed_t org[3]);
+void g_radius_damage(const fixed_t org[3], int dmg, int attacker, int ignore);
+void g_throw_gib(int model, const fixed_t org[3], int health);
+void g_throw_head(ent_t *e, int model, int health);
+ent_t *g_missile(int kind, const fixed_t org[3], const fixed_t vel[3], int owner);
+void g_run_thing(ent_t *e);          /* missiles, gibs, barrels: every tick */
+void g_box_damage(ent_t *e, int dmg);
+void g_use_entities(int name);       /* trap_spikeshooter */
+int  g_best_weapon(void);
+void g_next_weapon(void);
+void g_weapon_tick(int buttons, int pressed);
+
 /* g_main.c */
+particle_t *g_new_particle(const fixed_t org[3]);
+void g_particle_life(particle_t *p, int ticks);
 void g_new_game(void);               /* the player as a new game starts */
 void g_change_parms(void);           /* ... as he goes on to the next level */
 void g_init(void);                   /* the level's things; the player as the level began */
@@ -198,6 +243,7 @@ int  g_rand(void);                   /* 0..32767 */
 fixed_t g_frand(void);               /* 0 .. 1 (16.16) */
 fixed_t g_crand(void);               /* -1 .. 1 */
 void g_damage_player(int dmg, const fixed_t *from);
+void g_flash(int type, int amount);
 void g_damage(ent_t *e, int dmg);
 void g_hurt(ent_t *e, int dmg);
 void g_particles(const fixed_t org[3], const fixed_t dir[3], int color, int count);
@@ -240,6 +286,7 @@ void mv_tick(void);                  /* move movers, fire timers */
 void mv_touch_player(void);          /* triggers, buttons, door messages */
 void mv_touch_monster(ent_t *e);     /* door fields */
 void mv_damage(int mover, int dmg);  /* shot: secret doors */
+void mv_use_targets(int target);     /* SUB_UseTargets */
 int  mv_shoot_triggers(const fixed_t src[3], const fixed_t dir[3], fixed_t maxlen);
 void mv_render_state(void);          /* keyframes and offsets for the renderer */
 int  mv_state(int mover);            /* MS_ below */
@@ -263,6 +310,7 @@ void snd_play(int sound, const fixed_t *org, int vol, int att);
 void snd_static(int sound, const fixed_t org[3], int vol);
 void snd_update(void);
 void snd_stop_all(void);
+void snd_stop_dynamic(void);         /* what is playing stops; the static sounds go on */
 void snd_init_slave(void);           /* on the slave: PWM, DMA, interrupt */
 #define ATTN_NONE   0
 #define ATTN_NORM   1

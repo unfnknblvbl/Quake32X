@@ -43,9 +43,13 @@ def main():
         first = len(d) // PAGE
         d += blob + b'\xff' * (npages * PAGE - len(blob))
         name = os.path.basename(path).split('.')[0][:11]
-        dirent.append((first, npages, name))
-        print('  %-6s pages %2d..%2d  %7d bytes (%d KB free in the window)' % (
-            name, first, first + npages - 1, len(blob), (WINDOW_PAGES * PAGE - len(blob)) // 1024))
+        # flags: 1 = the level has a demo (its LVL_DEMO lump, src/level.h)
+        LVL_DEMO = 28
+        has_demo = struct.unpack_from('>i', blob, 8 + LVL_DEMO * 8 + 4)[0] > 0
+        dirent.append((first, npages, name, 1 if has_demo else 0))
+        print('  %-6s pages %2d..%2d  %7d bytes (%d KB free in the window)%s' % (
+            name, first, first + npages - 1, len(blob), (WINDOW_PAGES * PAGE - len(blob)) // 1024,
+            ', with a demo' if has_demo else ''))
     # whole megabytes, at least 8 MB (some loaders expect a power of two)
     size = 8 << 20
     while size < len(d):
@@ -54,8 +58,8 @@ def main():
     at = d.find(b'LEVELDIR', 0, PAGE)
     assert at >= 0 and d.find(b'LEVELDIR', at + 1, PAGE) < 0, 'no single LEVELDIR in the program'
     struct.pack_into('>I', d, at + 8, len(dirent))
-    for i, (first, npages, name) in enumerate(dirent):
-        struct.pack_into('>BBH12s', d, at + 12 + 16 * i, first, npages, 0, name.encode('latin1'))
+    for i, (first, npages, name, flags) in enumerate(dirent):
+        struct.pack_into('>BBH12s', d, at + 12 + 16 * i, first, npages, flags, name.encode('latin1'))
     struct.pack_into('>I', d, 0x1A4, size - 1)
     s = 0
     for i in range(0x200, size, 2):
