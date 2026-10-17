@@ -76,6 +76,7 @@ static int fb_fifo; static uint64_t fb_fifo_t;
 static cpu_t cpu[2];
 static uint64_t now_vbl;              /* vblank count */
 static uint16_t pad_now;
+static int noirq;           /* test: SH-2 VBlank interrupts never arrive */
 /* render timing: GO = COMM4 write by master, slave done = COMM6 write, master done = its first COMM6 poll */
 static uint64_t t_go, sum_master, sum_slave, nframes_r, t_sdone, sum_serial, t_flipreq, sum_flipwait, nflip, sum_upd, sum_hud;
 static int master_done_seen;
@@ -861,7 +862,7 @@ int main(int argc, char **argv)
             comm[6] = pad_now;
             comm[7]++;
             if (now_vbl % 60 == 0) printf("t=%3llus fps %u.%u\n", (unsigned long long)now_vbl / 60, comm[1] / 10, comm[1] % 10);
-            cpu[0].vint_pending = cpu[1].vint_pending = 1;
+            if (!noirq) cpu[0].vint_pending = cpu[1].vint_pending = 1;
             next_vbl += FRAME_CYCLES;
         }
         if (c->sleeping && !(c->vint_pending && (c->intmask & 8))) { c->cyc = next_vbl; continue; }
