@@ -14,7 +14,14 @@ static uint8_t *arena_base;         /* per-CPU memory: liquid buffers + surface 
 static int arena_each, arena_mesh = -1;
 static int win_x, win_y;            /* view window origin (32X pixels and rows) */
 volatile uint8_t dbg_phase;         /* demo phase, for the simulator's log */
-volatile int32_t dbg_fps10;         /* frames a second x 10, for the logs and harnesses */
+volatile int32_t dbg_fps10;
+volatile int32_t dbg_split, dbg_mspin, dbg_sspin;
+#ifndef BAL_DIV
+#define BAL_DIV 20000
+#endif
+#ifndef BAL_MAX
+#define BAL_MAX 16
+#endif         /* frames a second x 10, for the logs and harnesses */
 
 /* the view weapon of the frame being drawn (the 68000 shows it at the flip) */
 static struct { int weapon, frame; } gun;
@@ -575,21 +582,32 @@ void pri_main(void)
         SLAVE_GO = tag;
         r_render(&rcpu[0], 0, split);
         update_input(&last_tick, &oldpad);  /* game ticks while the slave draws */
+        /* the text, status bar and menu go into the Mega Drive's queue
+           while the slave still draws, and the master feeds the 68000
+           while it waits: nothing of this keeps the slave waiting */
+        overlays_draw(win_x, win_y, fps10, hint_time > 0);
         md_pump();
-        while (SLAVE_DONE != tag)
+        while (SLAVE_DONE != tag) {
+            if (!(mspin & 31))
+                md_pump();          /* (now and then: spins are what balances the split) */
             mspin++;
+        }
         MARS_SYS_COMM8 = tag;
         while (*(volatile int32_t *)UNCACHED(&slave_tag) != tag) ;     /* slave publishes its wait */
         sspin = *(volatile int32_t *)UNCACHED(&slave_spin);
+        dbg_split = split | (view.vh << 8);
+        dbg_mspin = mspin;
+        dbg_sspin = sspin;
 
         /* balance the two halves using who waited for whom: one spin is a
            few cycles, a row costs roughly 10-20k cycles */
         {
             int32_t d = mspin - sspin, step;
-            step = d / 4096;
+            /* a row is worth about 20000 spins: move about half the gap */
+            step = d / BAL_DIV;
             if (step == 0 && (d > 64 || d < -64)) step = d > 0 ? 1 : -1;
-            if (step > 3) step = 3;
-            if (step < -3) step = -3;
+            if (step > BAL_MAX) step = BAL_MAX;
+            if (step < -BAL_MAX) step = -BAL_MAX;
             split += step;
             {
                 int lim = view.vh >> 3;
@@ -598,11 +616,8 @@ void pri_main(void)
             }
         }
 
-        overlays_draw(win_x, win_y, fps10, hint_time > 0);
         if (menu_active || md_flush)
             md_wait();              /* paused, or a new level: show it all at once */
-        else
-            md_pump_for(48);
         md_flush = 0;
 
         now = frame_now;

@@ -6,7 +6,7 @@ view_t  view;
 
 #define MAX_MAP_LEAFS 4096
 #define MAX_MAP_NODES 4096
-#define MAX_MAP_FACES 9216          /* (tools/mkmap.py checks) */
+#define MAX_MAP_FACES 10240         /* (tools/mkmap.py checks) */
 
 uint8_t vis_leafs[MAX_MAP_LEAFS / 8];
 uint8_t vis_nodes[MAX_MAP_NODES / 8];
@@ -42,6 +42,9 @@ void level_init(const void *blob)
     lvl.fgeom     = (const lfgeom_t *)L(LVL_FACESPH);
     lvl.nodeparent = (const int16_t *)L(LVL_NODEPARENT);
     lvl.backtile  = L(LVL_BACKTILE);
+    lvl.flatof    = (const uint16_t *)L(LVL_FLATOF);
+    lvl.flatnode  = (const lflatnode_t *)L(LVL_FLATNODE);
+    lvl.flatlist  = (const uint16_t *)L(LVL_FLATLIST);
 #undef L
     lvl.numfaces  = h->lump[LVL_FACES].count;
     lvl.numleafs  = h->lump[LVL_LEAFS].count;
@@ -144,8 +147,12 @@ static void mark_leaf(int leaf)
     BIT_SET(vis_leafs, leaf);
     for (i = 0; i < lf->nummark; i++) {
         int f = lvl.marksurf[lf->firstmark + i];
-        if (f != 0xFFFF)
+        if (f != 0xFFFF) {
+            int g = lvl.flatof[f];
             BIT_SET(vis_faces, f);
+            if (g != 0xFFFF)
+                BIT_SET(vis_faces, g);  /* the merged face it is part of */
+        }
     }
     n = lf->parent;
     while (n >= 0 && !BIT_TEST(vis_nodes, n)) {
@@ -289,18 +296,35 @@ static void walk_bsp(rcpu_t *rc)
             side = (e >> 16) & 1;
             clip = e >> 17;
             node = &lvl.nodes[num];
-            /* faces are stored front-facing first, then back-facing */
-            if (side) {
-                ff = node->firstface + node->numfront;
-                nf = node->numfaces - node->numfront;
+            if (!view.textures) {
+                /* flat shading: the node's faces with same-coloured
+                   neighbours merged (front-facing first, then back) */
+                const lflatnode_t *fn = &lvl.flatnode[num];
+                const uint16_t *fl = lvl.flatlist + fn->first;
+                if (side) {
+                    fl += fn->nfront;
+                    nf = fn->nback;
+                } else
+                    nf = fn->nfront;
+                for (i = 0; i < nf; i++) {
+                    int fi = fl[i];
+                    if (BIT_TEST(vis_faces, fi))
+                        add_cand(rc, fi, clip);
+                }
             } else {
-                ff = node->firstface;
-                nf = node->numfront;
-            }
-            for (i = 0; i < nf; i++) {
-                int fi = ff + i;
-                if (BIT_TEST(vis_faces, fi))
-                    add_cand(rc, fi, clip);
+                /* faces are stored front-facing first, then back-facing */
+                if (side) {
+                    ff = node->firstface + node->numfront;
+                    nf = node->numfaces - node->numfront;
+                } else {
+                    ff = node->firstface;
+                    nf = node->numfront;
+                }
+                for (i = 0; i < nf; i++) {
+                    int fi = ff + i;
+                    if (BIT_TEST(vis_faces, fi))
+                        add_cand(rc, fi, clip);
+                }
             }
             num = node->child[!side];
         }
@@ -317,7 +341,7 @@ static void draw_range(rcpu_t *rc, int a, int b)
         const lfgeom_t *g = &lvl.fgeom[fr->fi];
         rc->faces++;
         rc->spancount += fr->nspan;
-        if (!view.textures)
+        if (!view.textures && !(g->flags & FF_KEEPTEX))
             draw_spans_flat(rc, fr, view.lighting ? g->lit : g->unlit);
         else if (g->flags & FF_SKY)
             draw_spans_sky(rc, fr);

@@ -312,7 +312,143 @@ static int silent_bufs;
 
 #define HALF (BUFSAMPLES / 2)
 
-static void mix(uint32_t *out)
+/* one output word: both pulse widths, clamped */
+static inline uint32_t pack(int32_t al, int32_t ar, int mid, int top)
+{
+    int l = mid + (al >> 7), r = mid + (ar >> 7);
+    if (l < 1) l = 1;
+    if (l > top) l = top;
+    if (r < 1) r = 1;
+    if (r > top) r = top;
+    return ((uint32_t)l << 16) | (uint32_t)r;
+}
+
+/* up to three channels straight into the output (each mixed sample is
+   played twice: the PWM runs at twice the samples' rate, so its carrier is
+   out of earshot) */
+static void mix_direct(uint32_t *out, int a, int b, const uint8_t *const *q, const int *lv, const int *rv,
+                       int m, int mid, int top)
+{
+    int i;
+    out += 2 * a;
+    if (m == 1) {
+        const uint8_t *p0 = q[0];
+        int l0 = lv[0], r0 = rv[0];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128;
+            uint32_t w = pack(v0 * l0, v0 * r0, mid, top);
+            out[0] = w;
+            out[1] = w;
+            out += 2;
+        }
+    } else if (m == 2) {
+        const uint8_t *p0 = q[0], *p1 = q[1];
+        int l0 = lv[0], r0 = rv[0], l1 = lv[1], r1 = rv[1];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128, v1 = (int)p1[i] - 128;
+            uint32_t w = pack(v0 * l0 + v1 * l1, v0 * r0 + v1 * r1, mid, top);
+            out[0] = w;
+            out[1] = w;
+            out += 2;
+        }
+    } else {
+        const uint8_t *p0 = q[0], *p1 = q[1], *p2 = q[2];
+        int l0 = lv[0], r0 = rv[0], l1 = lv[1], r1 = rv[1], l2 = lv[2], r2 = rv[2];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128, v1 = (int)p1[i] - 128, v2 = (int)p2[i] - 128;
+            uint32_t w = pack(v0 * l0 + v1 * l1 + v2 * l2, v0 * r0 + v1 * r1 + v2 * r2, mid, top);
+            out[0] = w;
+            out[1] = w;
+            out += 2;
+        }
+    }
+}
+
+/* more than three: two at a time into sums kept in the output words
+   themselves (left in the first of each pair, right in the second: no
+   stack, which is small inside the interrupt), then the last two or three
+   with the sums straight out */
+static void mix_many(uint32_t *out, int a, int b, const uint8_t *const *q, const int *lv, const int *rv,
+                     int m, int mid, int top)
+{
+    /* through the cache: the sums are read back, and the cache writes
+       through, so the memory the DMA reads stays right */
+#ifdef HOST
+    int32_t *acc = (int32_t *)out;
+#else
+    int32_t *acc = (int32_t *)((uint32_t)out & ~0x20000000);
+#endif
+    int i, k = 0;
+    for (i = a; i < b; i++)
+        acc[2 * i] = acc[2 * i + 1] = 0;
+    while (m - k > 3) {
+        const uint8_t *p0 = q[k], *p1 = q[k + 1];
+        int l0 = lv[k], r0 = rv[k], l1 = lv[k + 1], r1 = rv[k + 1];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128, v1 = (int)p1[i] - 128;
+            acc[2 * i] += v0 * l0 + v1 * l1;
+            acc[2 * i + 1] += v0 * r0 + v1 * r1;
+        }
+        k += 2;
+    }
+    {
+        const uint8_t *p0 = q[k], *p1 = q[k + 1];
+        const uint8_t *p2 = m - k > 2 ? q[k + 2] : q[k];
+        int l0 = lv[k], r0 = rv[k], l1 = lv[k + 1], r1 = rv[k + 1];
+        int l2 = m - k > 2 ? lv[k + 2] : 0, r2 = m - k > 2 ? rv[k + 2] : 0;
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128, v1 = (int)p1[i] - 128, v2 = (int)p2[i] - 128;
+            uint32_t w = pack(acc[2 * i] + v0 * l0 + v1 * l1 + v2 * l2,
+                              acc[2 * i + 1] + v0 * r0 + v1 * r1 + v2 * r2, mid, top);
+            out[2 * i] = w;
+            out[2 * i + 1] = w;
+        }
+    }
+}
+
+/* the buffer cut where channels start or stop, each stretch mixed with
+   only the channels playing in it */
+static void mix_segments(uint32_t *out, const uint8_t *const *p, const int *lv, const int *rv,
+                         const int *lo, const int *hi, int na, int mid)
+{
+    int cuts[2 * (NCHAN + NSTATIC) + 2], nc = 0, i, j, top = pwm_cycle - 1;
+    cuts[nc++] = 0;
+    cuts[nc++] = HALF;
+    for (i = 0; i < na; i++) {
+        cuts[nc++] = lo[i];
+        cuts[nc++] = hi[i];
+    }
+    for (i = 1; i < nc; i++)            /* insertion sort: a dozen at most */
+        for (j = i; j > 0 && cuts[j - 1] > cuts[j]; j--) {
+            int t = cuts[j];
+            cuts[j] = cuts[j - 1];
+            cuts[j - 1] = t;
+        }
+    for (i = 0; i + 1 < nc; i++) {
+        int a = cuts[i], b = cuts[i + 1], m = 0, k;
+        const uint8_t *q[NCHAN + NSTATIC];
+        int ql[NCHAN + NSTATIC], qr[NCHAN + NSTATIC];
+        if (a >= b)
+            continue;
+        for (k = 0; k < na; k++)
+            if (lo[k] <= a && hi[k] >= b) {
+                q[m] = p[k];
+                ql[m] = lv[k];
+                qr[m] = rv[k];
+                m++;
+            }
+        if (!m) {
+            uint32_t w = ((uint32_t)mid << 16) | mid, *o = out + 2 * a;
+            for (k = a; k < b; k++, o += 2)
+                o[0] = o[1] = w;
+        } else if (m <= 3)
+            mix_direct(out, a, b, q, ql, qr, m, mid, top);
+        else
+            mix_many(out, a, b, q, ql, qr, m, mid, top);
+    }
+}
+
+static __attribute__((noinline)) void mix(uint32_t *out)
 {
     const uint8_t *p[NCHAN + NSTATIC];
     int lv[NCHAN + NSTATIC], rv[NCHAN + NSTATIC], lo[NCHAN + NSTATIC], hi[NCHAN + NSTATIC];
@@ -364,29 +500,7 @@ static void mix(uint32_t *out)
         return;
     }
     silent_bufs = 0;
-    for (i = 0; i < HALF; i++) {
-        /* +-128 * 255 per channel: >> 7 gives about +-255 for one loud
-           sound against a mid point near 520 */
-        int32_t al = 0, ar = 0;
-        int l, r;
-        uint32_t w;
-        for (k = 0; k < na; k++)
-            if (i >= lo[k] && i < hi[k]) {
-                int v = (int)p[k][i] - 128;
-                al += v * lv[k];
-                ar += v * rv[k];
-            }
-        l = mid + (al >> 7);
-        r = mid + (ar >> 7);
-        if (l < 1) l = 1;
-        if (l > pwm_cycle - 1) l = pwm_cycle - 1;
-        if (r < 1) r = 1;
-        if (r > pwm_cycle - 1) r = pwm_cycle - 1;
-        w = ((uint32_t)l << 16) | (uint32_t)r;
-        out[0] = w;
-        out[1] = w;
-        out += 2;
-    }
+    mix_segments(out, p, lv, rv, lo, hi, na, mid);
 }
 
 #ifndef HOST

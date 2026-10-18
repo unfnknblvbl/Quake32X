@@ -10,7 +10,7 @@ enum {
     LVL_CLIPNODES, LVL_PALETTE, LVL_COLORMAP, LVL_CONCHARS, LVL_SKYTEX,
     LVL_FACESPH, LVL_NODEPARENT, LVL_BACKTILE,
     LVL_ENTS, LVL_MODELS, LVL_ANORMS, LVL_SOUNDS, LVL_MOVERS, LVL_MKEYS,
-    LVL_TRIGGERS, LVL_STRINGS, LVL_DEMO,
+    LVL_TRIGGERS, LVL_STRINGS, LVL_DEMO, LVL_FLATOF, LVL_FLATNODE, LVL_FLATLIST,
     LVL_NUMLUMPS
 };
 
@@ -57,6 +57,7 @@ typedef struct {
 #define FF_DARK      8
 #define FF_LIQUID   16                   /* water, slime, lava (not teleporters) */
 #define FF_UNDERWATER 32                 /* only visible from inside a liquid */
+#define FF_KEEPTEX  64                   /* textured in flat-shaded mode too: switches, exits */
 
 typedef struct {
     uint16_t firstvert;
@@ -93,6 +94,11 @@ typedef struct { int16_t plane, child[2], pad; } lclipnode_t;
 #define CONTENTS_SKY    -6
 
 typedef struct {
+    uint16_t first;                      /* into flatlist: front faces, then back */
+    uint8_t  nfront, nback;
+} lflatnode_t;
+
+typedef struct {
     const uint8_t     *base;
     const lheader_t   *hdr;
     const lplane_t    *planes;
@@ -115,6 +121,10 @@ typedef struct {
     const lfgeom_t    *fgeom;
     const int16_t     *nodeparent;
     const uint8_t     *backtile;         /* 64x64 border tile */
+    /* flat shading: faces merged where their colours match (tools/mkmap.py) */
+    const uint16_t    *flatof;           /* per face: the merged face it is part of, or 0xFFFF */
+    const lflatnode_t *flatnode;         /* per node: its faces in flat mode */
+    const uint16_t    *flatlist;
     int numfaces, numleafs, numnodes, numplanes, visleafs;
 } level_t;
 

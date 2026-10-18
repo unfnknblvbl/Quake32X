@@ -3,7 +3,9 @@
 mkrom.py - put the cartridge together: the program in the first 512 KB
 page, then each level blob from a page boundary.
 
-usage: mkrom.py build/q32x.bin out.32x e1m1.lvl e1m2.lvl e1m3.lvl
+usage: mkrom.py [--version X.Y.Z] build/q32x.bin out.32x e1m1.lvl e1m2.lvl e1m3.lvl
+
+The version goes in the Mega Drive header's memo field (0x1C8).
 
 The ROM is bigger than the 32X's 4 MB window, so it uses Sega's standard
 mapper (Super Street Fighter II's): the window is eight 512 KB pages, the
@@ -24,10 +26,17 @@ MAX_LEVELS = 8
 
 
 def main():
+    version = None
+    if len(sys.argv) > 2 and sys.argv[1] == '--version':
+        version = sys.argv[2]
+        del sys.argv[1:3]
     if len(sys.argv) < 4:
         print(__doc__)
         sys.exit(1)
     prog = bytearray(open(sys.argv[1], 'rb').read())
+    if version:
+        memo = ('Version ' + version).encode('ascii')[:40]
+        prog[0x1C8:0x1C8 + 40] = memo.ljust(40, b' ')
     if len(prog) > PAGE:
         raise SystemExit('program too big for the fixed page: %d bytes' % len(prog))
     levels = sys.argv[3:]

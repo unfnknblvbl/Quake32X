@@ -11,6 +11,7 @@
 const lmover_t *lmovers;
 int nmovers;
 fixed_t mover_off[MAX_MOVERS][3];
+static uint8_t rs_valid[MAX_MOVERS];    /* view.mkey/mres hold this mover's position */
 static const ltrigger_t *ltrigs;
 static int ntrigs;
 static const int16_t *mkeys;
@@ -759,6 +760,7 @@ GCODE void mv_init(void)
     if (ntrigs > MAX_TRIGGERS) ntrigs = MAX_TRIGGERS;
     memset(ms, 0, sizeof(ms));
     memset(ts, 0, sizeof(ts));
+    memset(rs_valid, 0, sizeof(rs_valid));
     for (m = 0; m < nmovers; m++) {
         const lmover_t *l = &lmovers[m];
         for (k = 0; k < 3; k++)
@@ -789,6 +791,14 @@ GCODE void mv_render_state(void)
         const int16_t *key = mkeys + l->firstkey * 3;
         int best = 0;
         uint32_t bestd = 0xFFFFFFFF;
+        if (rs_valid[m]) {
+            /* not moved since last frame: its keyframe and the rest stand */
+            const int16_t *kk = key + view.mkey[m] * 3;
+            if (mover_off[m][0] == FX(kk[0]) + view.mres[m][0] && mover_off[m][1] == FX(kk[1]) + view.mres[m][1]
+                && mover_off[m][2] == FX(kk[2]) + view.mres[m][2])
+                continue;
+        }
+        rs_valid[m] = 1;
         for (i = 0; i < l->nkeys; i++, key += 3) {
             int32_t dx = UNITS(mover_off[m][0]) - key[0], dy = UNITS(mover_off[m][1]) - key[1];
             int32_t dz = UNITS(mover_off[m][2]) - key[2];

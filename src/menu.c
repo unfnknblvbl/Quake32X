@@ -434,6 +434,9 @@ void menu_draw(void)
         return;
     }
     centre(0, g_mode == GM_DEMO ? "QUAKE" : "PAUSED", 1);
+#ifdef Q32X_VERSION
+    md_text(1, 0, "v" Q32X_VERSION, 0);
+#endif
     for (i = 0; i < M_NUM; i++) {
         p = buf;
         switch (i) {

@@ -9,6 +9,7 @@ All multi-byte values are big-endian (the SH-2 is big-endian).
 Layout is described by the header (see LVL_* in src/level.h).
 """
 import math
+import re
 import struct
 import sys
 import os
@@ -233,6 +234,13 @@ def v13_3(v):
 E = '>'
 
 
+# textures drawn textured even in flat-shaded mode, so the things the player
+# has to find stand out: buttons and switches (wall, floor and shootable),
+# exit signs, key-door symbols and slipgates
+KEEP_TEXTURE = re.compile(r'^(\+[0-9a-j])?(.*button.*|.*basebtn.*|basebutn.*|.*floorsw.*|.*shoot.*|switch.*'
+                          r'|z_exit.*|exit0.*|key0.*|wkey0.*|slip[0-9]*)$|^\+[0-9a-j]slip$')
+
+
 def main():
     global E
     if '--le' in sys.argv:
@@ -283,6 +291,8 @@ def main():
         t = textures[texinfo[ti][8]]
         name = t['name'] if t else ''
         fl = 0
+        if KEEP_TEXTURE.match(name.lower()):
+            fl |= 64    # drawn textured in flat-shaded mode too
         if name.startswith('sky'):
             fl |= 2
         if name.startswith('*'):
@@ -410,7 +420,7 @@ def main():
             if not allow_empty:
                 return -1
             vl = []
-        face_recs.append(dict(plane=f[0], flags=flags, texinfo=ti,
+        face_recs.append(dict(plane=f[0], flags=flags, texinfo=ti, row=row, avgc=avgc,
                               tmins=tmins, ext=ext, lofs=lofs, lit=lit, unlit=unlit,
                               vl=vl, tag=(mover + 1) | (key << 8) if mover >= 0 else 0))
         return len(face_recs) - 1
@@ -501,7 +511,7 @@ def main():
                 nfrag += 1
                 per_mover[mover] = per_mover.get(mover, 0) + 1
     print('bmodel fragments:', nfrag)
-    assert len(face_recs) <= 9216, 'more faces than MAX_MAP_FACES in src/r_main.c'
+    assert len(face_recs) <= 10240, 'more faces than MAX_MAP_FACES in src/r_main.c'
     for mv_, n_ in sorted(per_mover.items(), key=lambda x: -x[1])[:6]:
         if mv_ >= 0:
             print('  mover %d (%s *%d): %d fragments, %d keyframes %d apart' % (
@@ -565,6 +575,122 @@ def main():
     for k in face_map:
         face_map[k] = perm[face_map[k]]
 
+    # ------------------------------------------------ flat-shaded face sets
+    # Flat shading fills a face with one colour, so neighbouring faces of a
+    # node side with the same colours (lit and unlit) can be drawn as one
+    # polygon where their union is convex: fewer faces, the same picture.
+    # Merged faces are new records after the others; flatof links each face
+    # to the merged face it is part of (the renderer marks both visible);
+    # flatnode/flatlist give each node side's faces in flat mode.
+    NOMERGE = 2 | 4 | 16 | 64           # sky, liquids, kept textured (switches...)
+    MERGE_MAXV = 16                     # room for the clipper (MAXCLIPVERTS 24)
+    # faces of one texture whose light differs by up to FLAT_TOL of the 64
+    # light steps merge; the merged face takes their area-weighted light
+    FLAT_TOL = int(os.environ.get('FLAT_TOL', '4'))
+
+    def area2(vl, ax):
+        P = [(out_verts[v][ax[0]], out_verts[v][ax[1]]) for v in vl]
+        return abs(sum(P[k - 1][0] * P[k][1] - P[k][0] * P[k - 1][1] for k in range(len(P)))) or 1
+    nface_tex = len(face_recs)
+    flatof = [0xFFFF] * nface_tex
+    flatnode, flatlist = [], []
+
+    def merge_two(A, B, ax):
+        """A and B (vertex index lists, same winding) sharing an edge: their
+        union without collinear points, if it is convex and small enough"""
+        na, nb = len(A), len(B)
+        pos = {v: k for k, v in enumerate(B)}
+        for i in range(na):
+            a0, a1 = A[i], A[(i + 1) % na]
+            j = pos.get(a1)
+            if j is None or B[(j + 1) % nb] != a0:
+                continue
+            U = [A[(i + 1 + k) % na] for k in range(na)] + [B[(j + 2 + k) % nb] for k in range(nb - 2)]
+            if len(set(U)) != len(U):
+                return None
+            P = [(out_verts[v][ax[0]], out_verts[v][ax[1]]) for v in U]
+            # drop collinear points, then all turns must agree
+            keep = []
+            n = len(U)
+            for k in range(n):
+                p0, p1, p2 = P[k - 1], P[k], P[(k + 1) % n]
+                c = (p1[0] - p0[0]) * (p2[1] - p1[1]) - (p1[1] - p0[1]) * (p2[0] - p1[0])
+                if c != 0:
+                    keep.append((U[k], c > 0))
+            if len(keep) < 3 or len(keep) > MERGE_MAXV:
+                return None
+            if len(set(sg for _, sg in keep)) != 1:
+                return None
+            return [v for v, _ in keep]
+        return None
+
+    for ni, n in enumerate(nodes):
+        ff, nf = n[9], n[10]
+        if ff + nf > nworld:
+            flatnode.append((len(flatlist), 0, 0))     # a submodel's node: never walked
+            continue
+        sides = []
+        for rng in (range(ff, ff + numfront[ni]), range(ff + numfront[ni], ff + nf)):
+            polys = []
+            for i in rng:
+                r = face_recs[i]
+                key = None
+                if not (r['flags'] & NOMERGE) and len(r['vl']) >= 3:
+                    key = (r['avgc'], r['unlit'], r['flags'], r['plane'])
+                polys.append([list(r['vl']), [i], key, r['row'], r['row']])
+            ax = None
+            if polys:
+                pn = planes[face_recs[polys[0][1][0]]['plane']][0:3]
+                kk = max(range(3), key=lambda a: abs(pn[a]))
+                ax = [a for a in range(3) if a != kk]
+            changed = True
+            while changed:
+                changed = False
+                for x in range(len(polys)):
+                    if polys[x] is None or polys[x][2] is None:
+                        continue
+                    for y in range(x + 1, len(polys)):
+                        if polys[y] is None or polys[y][2] != polys[x][2]:
+                            continue
+                        lo_, hi_ = min(polys[x][3], polys[y][3]), max(polys[x][4], polys[y][4])
+                        if hi_ - lo_ > FLAT_TOL:
+                            continue
+                        u = merge_two(polys[x][0], polys[y][0], ax)
+                        if u:
+                            polys[x][0] = u
+                            polys[x][1] += polys[y][1]
+                            polys[x][3], polys[x][4] = lo_, hi_
+                            polys[y] = None
+                            changed = True
+                polys = [q for q in polys if q]
+            ids = []
+            for vl, members, key, _, _ in polys:
+                if len(members) == 1:
+                    ids.append(members[0])
+                    continue
+                rec = dict(face_recs[members[0]])
+                rec['vl'] = vl
+                rec['tag'] = 0
+                if not (rec['flags'] & 8):      # (dark faces stay dark)
+                    wsum = sum(area2(face_recs[mm]['vl'], ax) for mm in members)
+                    rrow = sum(area2(face_recs[mm]['vl'], ax) * face_recs[mm]['row'] for mm in members) / wsum
+                    rec['row'] = int(round(rrow))
+                    rec['lit'] = colormap[rec['row'] * 256 + rec['avgc']]
+                face_recs.append(rec)
+                g = len(face_recs) - 1
+                for mm in members:
+                    flatof[mm] = g
+                ids.append(g)
+            sides.append(ids)
+        assert len(sides[0]) < 256 and len(sides[1]) < 256
+        flatnode.append((len(flatlist), len(sides[0]), len(sides[1])))
+        flatlist += sides[0] + sides[1]
+    flatof += [0xFFFF] * (len(face_recs) - nface_tex)
+    nmerged = sum(1 for x in flatof[:nface_tex] if x != 0xFFFF)
+    print('flat faces: %d faces of %d merged into %d (world faces drawn flat: %d instead of %d)' % (
+        nmerged, nworld, len(face_recs) - nface_tex, len(flatlist), sum(n[10] for n in nodes if n[9] + n[10] <= nworld)))
+    assert len(face_recs) <= 10240, 'more faces than MAX_MAP_FACES in src/r_main.c'
+
     # node faces -> output face indices (world faces map 1:1)
     # ------------------------------------------------ build blob
     blob = Blob()
@@ -572,7 +698,7 @@ def main():
                   'texinfo', 'textures', 'light', 'vis', 'leaffrags', 'clipnodes',
                   'palette', 'colormap', 'conchars', 'skytex', 'facesph', 'nodeparent',
                   'backtile', 'ents', 'models', 'anorms', 'sounds', 'movers', 'mkeys',
-                  'triggers', 'strings', 'demo']
+                  'triggers', 'strings', 'demo', 'flatof', 'flatnode', 'flatlist']
     HDR_SIZE = 4 + 4 + len(hdr_fields) * 8 + 64
     blob.data += b'\0' * HDR_SIZE
     offs = {}
@@ -756,6 +882,18 @@ def main():
         offs[k] = o
         counts[k] = n
     offs['demo'], counts['demo'] = 0, 0
+    b = bytearray()
+    for x in flatof:
+        b += struct.pack(E + 'H', x)
+    offs['flatof'], counts['flatof'] = blob.add(b), len(flatof)
+    b = bytearray()
+    for (first, nfr, nbk) in flatnode:
+        b += struct.pack(E + 'HBB', first, nfr, nbk)
+    offs['flatnode'], counts['flatnode'] = blob.add(b), len(flatnode)
+    b = bytearray()
+    for x in flatlist:
+        b += struct.pack(E + 'H', x)
+    offs['flatlist'], counts['flatlist'] = blob.add(b), len(flatlist)
     if demo:
         blob.align(4)
         offs['demo'] = blob.add(demo['data'])

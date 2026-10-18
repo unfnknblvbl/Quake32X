@@ -7,9 +7,12 @@ MDAS    = $(TC)/m68k-elf-as
 MDLD    = $(TC)/m68k-elf-ld
 MDOBJCOPY = $(TC)/m68k-elf-objcopy
 
+# the release (VERSION: 0.x.y while in development, 1.0.0 the first public release)
+VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
+
 CFLAGS_OPT ?= -O2
 CFLAGS  = -m2 -mb $(CFLAGS_OPT) -ffreestanding -fno-builtin -nostdlib -Wall -Wno-unused-function \
-          -fomit-frame-pointer -fno-common -Isrc $(EXTRA_CFLAGS)
+          -fomit-frame-pointer -fno-common -Isrc -DQ32X_VERSION='"$(VERSION)"' $(EXTRA_CFLAGS)
 LDFLAGS = -m2 -mb -nostdlib -T src/mars.ld -Wl,-Map=build/q32x.map
 
 SRCS    = $(wildcard src/*.c)
@@ -92,15 +95,17 @@ OPT_r_geom = -Os
 OPT_r_setup = -Os
 OPT_r_main = -Os
 
+build/menu.o: VERSION
+
 build/%.o: src/%.c src/*.h | build
 	$(CC) $(CFLAGS) $(OPT_$*) -c -o $@ $<
 
 build/q32x.elf: $(OBJS) src/mars.ld
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) -lgcc
 
-quake32x.32x: build/q32x.elf tools/mkrom.py $(LVLS)
+quake32x.32x: build/q32x.elf tools/mkrom.py $(LVLS) VERSION
 	$(OBJCOPY) -O binary $< build/q32x.bin
-	python3 -I tools/mkrom.py build/q32x.bin $@ $(LVLS)
+	python3 -I tools/mkrom.py --version $(VERSION) build/q32x.bin $@ $(LVLS)
 
 build:
 	mkdir -p build
