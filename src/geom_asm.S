@@ -52,12 +52,17 @@ _make_poly_asm:
         extu.b  r0,r8                   /* n */
         mov     #3,r0
         cmp/ge  r0,r8
-        bf      .Lret0
+        bf      .Lbad
         mov     #18,r0                  /* MAXCLIPVERTS - CP_NUM */
         cmp/gt  r0,r8
-        bt      .Lret0
+        bt      .Lbad
         tst     r12,r12
-        bt      .Lverts
+        bf      .Lsphere
+        bra     .Lverts
+        nop
+.Lbad:  bra     .Lexit
+        mov     #0,r0
+.Lsphere:
 
         /* the bounding sphere against the planes still in clip */
         mov     r14,r1
