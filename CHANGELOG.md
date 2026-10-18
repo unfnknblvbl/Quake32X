@@ -4,6 +4,28 @@ Versions are 0.x.y until the first public release, 1.0.0. The minor number
 goes up for new features, the last number for fixes. Versions before 0.5.0
 were tagged afterwards, on the commits listed.
 
+## 0.6.0 — 2026-10-18
+
+Speed, from giving the second CPU more of the frame and from assembly.
+
+- **The next frame is prepared while the second CPU draws.** The view, the
+  visibility, the models to draw and the BSP walk for the next frame are
+  worked out by the first CPU while the second is still drawing the current
+  one, instead of after both are done. In the E1M3 attract demo the time
+  each frame where only one CPU worked went from about 15 ms to 6 ms.
+- **One BSP walk a frame instead of two.** The walk of the level's tree is
+  done once for the whole screen, ahead of the frame, and both CPUs take
+  their faces from it.
+- **Assembly** for the rasterizer, the face geometry and the model vertices.
+  Each is checked frame by frame against its C version (new
+  `tools/check_asm.sh`): the pictures are the same bit for bit.
+- The sound mixer's last library call is gone.
+- In the cycle model, against 0.5.0: the E1M3 attract demo 19% faster flat
+  shaded (13.8 → 16.5 fps) and 8% faster textured (6.7 → 7.3); the E1M1
+  route 4% faster flat (26.9 → 27.9) and 6% faster textured (15.0 → 15.9).
+- Tried and left out: skipping faces already hidden behind what is drawn
+  (it cost more than it saved), and reordering the level data (about 1%).
+
 ## 0.5.0 — 2026-10-18
 
 Speed, mostly for flat shading and the second CPU.

@@ -184,7 +184,7 @@ _md_data:
         .else
         /* compatible build: stacks in SDRAM, normal 4-way cache */
         .equ    pri_stack, 0x06040000
-        .equ    sec_stack, 0x0603E800      /* 2 KB (it uses under 1 KB); the master has 6 KB above it (it uses about 2.5 KB) */
+        .equ    sec_stack, 0x0603F000      /* 2 KB (it uses about 1.1 KB); the master has 4 KB above it (it uses up to about 2.4 KB) */
         .equ    CCR_ON, 0x11
         .endif
 

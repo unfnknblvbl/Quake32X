@@ -202,7 +202,8 @@ typedef struct {
     uint16_t *zbuf;
 } scene_t;
 
-extern scene_t scene;
+extern scene_t scene, scene_next;
+void g_commit_scene(void);
 extern ent_t ents[MAX_ENTS];
 extern pstate_t ps;
 extern particle_t particles[MAX_PARTICLES];
@@ -276,7 +277,7 @@ int  g_ray_box(const fixed_t start[3], const fixed_t dir[3], fixed_t maxlen,
 int  g_light_point(const fixed_t p[3]);
 int  g_leaf_visible(const fixed_t p[3]);
 void g_relink(ent_t *e);
-#define LEAF_VISIBLE(l) ((l) > 0 && BIT_TEST(vis_leafs, (l)))
+#define LEAF_VISIBLE(l) ((l) > 0 && BIT_TEST(vis.leafs, (l)))
 
 /* g_mover.c: doors, plats, buttons, triggers */
 extern const lmover_t *lmovers;

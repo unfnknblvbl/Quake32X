@@ -181,6 +181,22 @@ optimistic about 32X timing:
   figures from the 32X hardware manual.
 * **PicoDrive.** This emulator charges no memory wait states.
 
+**0.6.0 against 0.5.0** (same runs as below):
+
+| Run | 0.5.0 | 0.6.0 | |
+|---|---|---|---|
+| E1M1 route, textured | 14.96 | 15.86 | +6.0% |
+| E1M1 route, flat | 26.90 | 27.92 | +3.8% |
+| E1M1 route, flat, 70% screen | 28.33 | 29.05 | +2.5% |
+| E1M3 demo, textured | 6.72 | 7.25 | +7.9% |
+| E1M3 demo, flat | 13.81 | 16.45 | +19.1% |
+
+The E1M3 demo gains most because it has the most per-frame work outside
+the renderer (monsters, the demo's entities) that now overlaps the second
+CPU's drawing; the E1M1 route is a camera path with no game at all. The
+figures move by a percent or so with small changes anywhere in the
+program (cache and balance effects), so differences under 2% are noise.
+
 **0.5.0 against 0.4.1** (cycle model, full screen unless noted; the E1M1
 route with no monsters, the E1M3 attract demo averaged over its first loop):
 
@@ -321,28 +337,43 @@ frame. Item boxes (`maps/b_*.bsp`) become one-frame models.
 
 At runtime, each frame goes like this:
 
-1. **Master SH-2.** Reads input, moves the player against the clip hull, and
-   rebuilds the PVS bitsets when the camera changes leaf.
-2. **Screen split.** The two SH-2s each render a horizontal band of the
+1. **Screen split.** The two SH-2s each render a horizontal band of the
    screen. The split row moves each frame to balance the load: each CPU counts
    how long it waits for the other, and the split shifts by that amount
-   (about 20,000 waiting loops make one row, at most 16 rows a frame). While
-   the master waits it draws the Mega Drive overlays and feeds the 68000's
-   link, so that work no longer runs after both CPUs are done.
+   (about 20,000 waiting loops make one row, at most 16 rows a frame).
+2. **The next frame, prepared while the slave draws** (0.6.0). Once the
+   master has drawn its band it runs the game ticks, draws the Mega Drive
+   overlays, and prepares the whole of the next frame: the view, the PVS
+   when the camera changes leaf, the movers' state, the models and
+   particles to draw, and the BSP walk. All of this goes into a second copy
+   (`view_next`, `scene_next`, the spare candidate list) while the slave
+   still draws from the first, and `commit_frame` makes it current between
+   frames, when both CPUs are idle. The balance hands the slave more rows
+   for it. Before 0.6.0 this was done after both CPUs had finished, with the
+   slave waiting: about 15 ms of a 68 ms frame in the E1M3 demo, now about
+   6 ms (what is left is mostly the frame-to-frame change in the work,
+   which the balance can only follow a frame late).
 3. **Batched pipeline.** On each CPU, every stage runs over a batch of 32
    faces. That keeps each stage's code inside the 2 KB cache instead of
    refetching about 5 KB of code for every face. The stages are:
-   * **A: BSP walk.** Front-to-back, with an explicit stack, PVS tests and
-     frustum culling of node bounding boxes (with clip flags). It collects
-     candidate faces.
-   * **B: geometry.** A bounding-sphere test against the frustum, then vertex
-     transforms using 16-bit multiplies, through a per-frame vertex cache.
-     The divide for projection runs on the hardware divider while the
-     outcodes are computed. Faces are then clipped in view space, but only
-     against the planes they actually cross.
-   * **C: rasterization.** Walks each polygon's left and right edges into
-     per-row coverage gap lists. Nothing is ever overdrawn, rows that are
-     already covered are skipped, and the CPU stops once its band is full.
+   * **A: BSP walk**, once a frame for the whole window (0.6.0; until then
+     each CPU walked the tree for its own band). Front-to-back, with an
+     explicit stack, PVS tests and frustum culling of node bounding boxes
+     (with clip flags). It collects the candidate faces, up to 1,024 (the
+     three levels peak at about 650), which both CPUs then take in order.
+   * **B: geometry** (SH-2 assembly, `src/geom_asm.S`, from 0.6.0). A
+     bounding-sphere test against the frustum (each CPU adds its own band's
+     top and bottom planes), then vertex transforms through a per-frame
+     vertex cache, with the multiply-accumulate unit reading the vertex and
+     the view matrix from memory. The divide for projection runs on the
+     hardware divider while the outcodes are computed. A face that crosses
+     a plane it must be clipped against (about half of those that get this
+     far) is clipped in C, in view space, against only those planes; the
+     vertices that stay keep the projection they already have.
+   * **C: rasterization** (SH-2 assembly, `src/raster_asm.S`, from 0.6.0).
+     Walks each polygon's left and right edges into per-row coverage gap
+     lists. Nothing is ever overdrawn, rows that are already covered are
+     skipped, and the CPU stops once its band is full.
    * **D: shading.** Sets up 1/z, s/z and t/z gradients and fetches the
      surface from a Quake-style surface cache of lit textures (one per CPU,
      ring-allocated). Then it draws the spans.
@@ -372,7 +403,8 @@ The game (`src/g_*.c`, `src/r_model.c`, `src/snd.c`):
 
 * **Game logic** runs on the master at 60 Hz, right after it draws its own
   rows and while the slave is still drawing, so the row split hands the
-  slave more of the picture. Monsters follow id's QuakeC (soldier.qc,
+  slave more of the picture. (The particles are the one thing the slave
+  reads straight from the game; a particle can be drawn one tick late.) Monsters follow id's QuakeC (soldier.qc,
   dog.qc, ogre.qc, knight.qc, demon.qc, wizard.qc, zombie.qc, ai.qc,
   fight.qc) and Quake's step-and-chase movement against the clip hulls,
   thinking ten times a second. Each monster is a table of its animations:
@@ -396,7 +428,9 @@ The game (`src/g_*.c`, `src/r_model.c`, `src/snd.c`):
   back to front without it.
 * **Models** are flat shaded in both texture modes, one colour per triangle,
   lit the way Quake lights models. Each triangle takes the depth of its
-  nearest vertex; that is close enough at this resolution.
+  nearest vertex; that is close enough at this resolution. Their vertex
+  transform, lighting and projection are SH-2 assembly
+  (`src/model_asm.S`, from 0.6.0).
 * **Sound.** The slave's DMA channel 1 feeds the PWM: when a buffer of 256
   stereo samples has played, the DMA interrupt restarts it on the other
   buffer and mixes the next one (6 channels of Quake's 11 kHz samples, each
@@ -473,6 +507,16 @@ The Mega Drive layer (`src-md/md.s`, `src/mdlink.c`, `tools/mkmd.py`):
 
 Other tricks:
 
+* **Assembly checked against C.** Each assembly stage has its C version
+  (built for the host, and on the 32X with `-DC_RASTER`, `-DC_GEOM` or
+  `-DC_MODEL`). `tools/check_asm.sh` builds both into the attract demo with
+  test switches that make the frames independent of speed (`FIXED_TICKS`,
+  `SERIAL_FRAME`, `FIXED_SPLIT`; `TEST_CFG` sets the menu settings) and
+  compares every distinct frame of the 32X picture (`sh2sim -video32x`).
+  They are the same bit for bit.
+* **Arithmetic right shifts.** The SH-2 shifts one bit at a time, and GCC
+  calls a library routine for `x >> 7`. The mixer gets it from the high word
+  of a multiply by 2^25 instead.
 * **Two-way cache mode** (`FAST=1` only). Each SH-2's stack and the span
   loop live in its 2 KB of on-chip RAM (0xC0000000). Register spills then
   avoid the write-through SDRAM bus, and the hot loop never misses the cache.
@@ -481,6 +525,14 @@ Other tricks:
   them.
 * **Compiler flags per file.** Geometry code is compiled with `-Os`, since it
   is bound by instruction-cache misses. Span and surface code uses `-O2`.
+  (`-O2` for the geometry was tried again in 0.6.0: 1-2% faster flat
+  shaded, 3% slower textured, as the bigger code takes surface cache.)
+* **SDRAM is the surface cache.** Whatever the program and its data do not
+  use is shared between the two surface caches, and textured mode is very
+  sensitive to it: 4 KB less for each CPU costs about 8% over the E1M1
+  route. 0.6.0 needs about 2.5 KB more data (the second view, scene and
+  candidate list) and took it back from the master's stack, which is now
+  4 KB (it uses up to about 2.4 KB).
 
 ## Building
 
@@ -577,7 +629,8 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
 * `tools/sh2sim.c`: the dual SH-2 and 32X bus timing model, with
   per-function profiles (`-prof`, including code run from ROM), hottest
   instructions (`-hot N`), scripted pad input, screenshots, video capture
-  (`-video`), PWM sound with the SH-2 DMA and its interrupt (`-audio`), and
+  (`-video`; `-video32x` writes the 32X framebuffer's colour indices alone,
+  for comparisons), PWM sound with the SH-2 DMA and its interrupt (`-audio`), and
   memory watches in the per-vblank log (`-watch symbol n`). Built by
   `tools/build_sim.sh` with `tools/mdsim.h`, it also runs the Mega Drive
   side: the ROM's 68000 program (on the Musashi 68000 core, taken from a
@@ -599,6 +652,10 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
   real-hardware estimates averaged over the walkthrough route, from one fixed
   view (built with `-DSTART_POS=x,y,z,yaw,pitch`), or at the spawn point and
   down the first hall.
+* `tools/check_asm.sh`: the assembly stages against their C versions, frame
+  by frame (How it works, Other tricks).
+* `src/asmoff.c`: structure offsets for the assembly files, turned into
+  `build/asmoff.h` by the Makefile.
 * `tools/harness.c`: a headless libretro front end for PicoDrive, used for
   screenshots, scripted input and sound capture (`AUDIO=file.raw`).
 * `host/`: the same renderer built for a PC, with sanitizers and per-frame
@@ -608,18 +665,25 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
 
 * The rest of Episode 1 (E1M4-E1M8). The cartridge was kept to the first
   three levels; each of the others would need another 2.5-3.5 MB.
-* Speed in the bigger levels. E1M3 is much heavier than E1M1: the attract
-  demo averages 6.9 fps textured at full screen in the cycle model (4 to 13
-  fps), against 14.9 fps over the E1M1 route. Flat shading or a smaller
-  screen helps a lot. Simpler level geometry (fewer, larger faces) was
-  discussed but has not been tried.
+* Speed in the bigger levels. E1M3 is much heavier than E1M1 (see
+  Performance). Flat shading or a smaller screen helps a lot. Simpler level
+  geometry (fewer, larger faces) is planned as a tool in the level editor.
 * Fall damage, the player's death animation, textured monster skins.
 * Simpler monster models (about half the triangles) would make fights
   faster.
 * `FAST=1` gives each CPU a 2 KB on-chip stack, which is too small for the
   game's collision code; it hasn't been tried with the game.
-* Assembly versions of geometry stages B and C, which are the biggest
-  remaining cost.
+* What was tried in 0.6.0 and left out: testing each face's bounding sphere
+  (and the BSP walk's subtrees) against what is already drawn before its
+  vertices are transformed. About 40% of the faces that reach the
+  rasterizer are completely hidden, but only half of those can be caught a
+  batch early, and the test cost more than it saved (1% slower). A layout
+  of the level data in the order it is read was estimated at about 1%,
+  since the faces and nodes already sit in walk order (skipping the leaves
+  without movers' fragments without reading them made no measurable
+  difference). The rest of the time in stages B and C is mostly
+  waiting for cartridge ROM and SDRAM writes, which assembly does not
+  change: the three assembly stages together gave about 5%.
 * Hardware verification. Everything has been checked in PicoDrive (dynarec
   and interpreter) and the cycle model, but not on a real 32X, nor with a
   real cartridge that has the mapper.

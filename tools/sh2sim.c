@@ -938,6 +938,8 @@ static uint16_t parse_buttons(const char *s)
     return b;
 }
 
+static int video32x;                    /* -video32x: the 32X framebuffer alone, its colour indices as grey */
+
 static void write_frame(FILE *f)
 {
     static uint8_t buf[320 * 224 * 3];
@@ -948,14 +950,19 @@ static void write_frame(FILE *f)
     for (y = 0; y < 224; y++) {
         uint32_t lo = rd_be(&fb[y * 2], 2) * 2;
         for (x = 0; x < 320; x++) {
-            uint16_t p = cram[fb[(lo + x) & 0x1FFFF]];
+            uint8_t ix = fb[(lo + x) & 0x1FFFF];
+            uint16_t p = cram[ix];
             int r = p & 31, g = (p >> 5) & 31, b = (p >> 10) & 31;
             p32x[y * 320 + x] = p;
+            if (video32x) {             /* the colour indices, as grey */
+                *o++ = ix; *o++ = ix; *o++ = ix;
+                continue;
+            }
             *o++ = (r << 3) | (r >> 2); *o++ = (g << 3) | (g >> 2); *o++ = (b << 3) | (b >> 2);
         }
     }
 #ifdef MD68K
-    if (md_on)
+    if (md_on && !video32x)
         md_mix(buf, p32x, vdp_mode & 0x80);
 #endif
     fwrite(buf, 1, sizeof(buf), f);
@@ -1027,6 +1034,7 @@ int main(int argc, char **argv)
         }
 #endif
         else if (!strcmp(argv[i], "-video") && i + 1 < argc) video = fopen(argv[++i], "wb");
+        else if (!strcmp(argv[i], "-video32x") && i + 1 < argc) { video = fopen(argv[++i], "wb"); video32x = 1; }
         else if (!strcmp(argv[i], "-vlog") && i + 1 < argc) vlog = fopen(argv[++i], "w");
         else if (!strcmp(argv[i], "-audio") && i + 1 < argc) audio = fopen(argv[++i], "wb");
         else if (!strcmp(argv[i], "-watch") && i + 2 < argc && nwatch < 4) {

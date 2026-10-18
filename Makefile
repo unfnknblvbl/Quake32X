@@ -15,9 +15,11 @@ CFLAGS  = -m2 -mb $(CFLAGS_OPT) -ffreestanding -fno-builtin -nostdlib -Wall -Wno
           -fomit-frame-pointer -fno-common -Isrc -DQ32X_VERSION='"$(VERSION)"' $(EXTRA_CFLAGS)
 LDFLAGS = -m2 -mb -nostdlib -T src/mars.ld -Wl,-Map=build/q32x.map
 
-SRCS    = $(wildcard src/*.c)
+SRCS    = $(filter-out src/asmoff.c,$(wildcard src/*.c))
 ASRCS   = $(filter-out src/crt0.s,$(wildcard src/*.s))
-OBJS    = build/crt0.o $(patsubst src/%.c,build/%.o,$(SRCS)) $(patsubst src/%.s,build/%.o,$(ASRCS))
+CSRCS_ASM = $(wildcard src/*.S)
+OBJS    = build/crt0.o $(patsubst src/%.c,build/%.o,$(SRCS)) $(patsubst src/%.s,build/%.o,$(ASRCS)) \
+          $(patsubst src/%.S,build/%.o,$(CSRCS_ASM))
 
 MAP     ?= e1m1
 # the levels in the cartridge, in the order of play
@@ -89,6 +91,14 @@ build/crt0.o: src/crt0.s build/m68k.bin build/md_data.bin
 
 build/%.o: src/%.s | build
 	$(AS) --big -o $@ $<
+
+# structure offsets for the assembly (.S) files
+build/asmoff.h: src/asmoff.c src/*.h | build
+	$(CC) $(CFLAGS) -S -o build/asmoff.s src/asmoff.c
+	sed -n 's/^->\([A-Z0-9_]*\) #\(-*[0-9]*\).*/#define \1 \2/p' build/asmoff.s > $@
+
+build/%.o: src/%.S build/asmoff.h | build
+	$(CC) $(CFLAGS) -Ibuild -c -o $@ $<
 
 # geometry code is instruction-cache bound: smaller beats faster here
 OPT_r_geom = -Os

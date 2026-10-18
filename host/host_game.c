@@ -106,9 +106,9 @@ int main(int argc, char **argv)
         rc[k].cpu = k;
         r_arena(&rc[k], malloc(ARENA), ARENA, hash[k], getenv("MESH") != NULL);
     }
-    view.cachegen = 1;
-    view.vw = SCREENW;
-    view.vh = SCREENH - SBAR_H;
+    view_next.cachegen = 1;
+    view_next.vw = SCREENW;
+    view_next.vh = SCREENH - SBAR_H;
     r_fb = r_screen;
     game_init();
     scene.zbuf = zbuf_mem;
@@ -177,21 +177,24 @@ int main(int argc, char **argv)
                 pressed = 0;
             }
         if (getenv("FLAT")) cfg.textures = 0;
-        view.textures = cfg.textures;
-        view.lighting = cfg.lighting;
-        view.mesh = cfg.mesh;
-        view.far = far_levels[cfg.far] << 16;
+        view_next.textures = cfg.textures;
+        view_next.lighting = cfg.lighting;
+        view_next.mesh = cfg.mesh;
+        view_next.far = far_levels[cfg.far] << 16;
         if (g_mode == GM_DEMO) {
             pd_update();
             pd_eye(eye);
         } else
             game_eye(eye);
-        view.time = fr * tpf;
+        view_next.time = fr * tpf;
         r_setup_view(eye, player.yaw, player.pitch);
         leaf = r_pointleaf(eye);
-        view.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;
+        view_next.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;
         if (leaf != viewleaf) { r_markleaves(leaf); viewleaf = leaf; }
         g_build_scene();
+        r_walk();
+        r_commit();
+        g_commit_scene();
         r_render(&rc[0], 0, view.vh / 2);
         r_render(&rc[1], view.vh / 2, view.vh);
         overlays_draw(0, 0, 150, fr < 120);

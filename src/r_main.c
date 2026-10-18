@@ -2,15 +2,12 @@
 #include "g_local.h"
 
 level_t lvl;
-view_t  view;
+view_t  view, view_next;
 
-#define MAX_MAP_LEAFS 4096
-#define MAX_MAP_NODES 4096
-#define MAX_MAP_FACES 10240         /* (tools/mkmap.py checks) */
-
-uint8_t vis_leafs[MAX_MAP_LEAFS / 8];
-uint8_t vis_nodes[MAX_MAP_NODES / 8];
-uint8_t vis_faces[MAX_MAP_FACES / 8];
+visset_t vis;
+candlist_t cands[2];                /* the BSP walk's output (r_walk) */
+int cand_cur;
+static int cand_ready;              /* cands[cand_cur ^ 1] holds the next frame's */
 uint8_t colormap[64 * 256];
 const uint8_t bitmask8[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
 gaprow_t gaps[SCREENH];
@@ -68,40 +65,40 @@ void r_setup_view(fixed_t org[3], int yaw, int pitch)
 
     int32_t k32;
 
-    if (view.vw <= 0) { view.vw = SCREENW; view.vh = SCREENH; }
-    view.proj = view.vw >> 1;
-    view.proj40 = (int64_t)view.proj << 40;
-    view.vw16 = view.vw << 16;
-    view.cx16 = view.vw << 15;
-    view.cy16 = view.vh << 15;
-    view.k24 = hw_div(1 << 24, view.proj);
-    view.mipscale = hw_div(PROJ << 16, view.proj);
-    k32 = hw_div64((int64_t)1 << 32, view.proj);       /* 2^32 / proj */
+    if (view_next.vw <= 0) { view_next.vw = SCREENW; view_next.vh = SCREENH; }
+    view_next.proj = view_next.vw >> 1;
+    view_next.proj40 = (int64_t)view_next.proj << 40;
+    view_next.vw16 = view_next.vw << 16;
+    view_next.cx16 = view_next.vw << 15;
+    view_next.cy16 = view_next.vh << 15;
+    view_next.k24 = hw_div(1 << 24, view_next.proj);
+    view_next.mipscale = hw_div(PROJ << 16, view_next.proj);
+    k32 = hw_div64((int64_t)1 << 32, view_next.proj);       /* 2^32 / proj */
 
-    view.org[0] = org[0]; view.org[1] = org[1]; view.org[2] = org[2];
-    view.yaw = yaw; view.pitch = pitch;
-    view.fwd[0] = fixmul(cy, cp);
-    view.fwd[1] = fixmul(sy, cp);
-    view.fwd[2] = -sp;
-    view.right[0] = sy;
-    view.right[1] = -cy;
-    view.right[2] = 0;
-    view.down[0] = -fixmul(cy, sp);
-    view.down[1] = -fixmul(sy, sp);
-    view.down[2] = -cp;
+    view_next.org[0] = org[0]; view_next.org[1] = org[1]; view_next.org[2] = org[2];
+    view_next.yaw = yaw; view_next.pitch = pitch;
+    view_next.fwd[0] = fixmul(cy, cp);
+    view_next.fwd[1] = fixmul(sy, cp);
+    view_next.fwd[2] = -sp;
+    view_next.right[0] = sy;
+    view_next.right[1] = -cy;
+    view_next.right[2] = 0;
+    view_next.down[0] = -fixmul(cy, sp);
+    view_next.down[1] = -fixmul(sy, sp);
+    view_next.down[2] = -cp;
     for (i = 0; i < 3; i++) {
         /* x * 2^20 / proj == x * (2^32 / proj) >> 12, without a 64-bit divide
            (2^20, not 2^21: the smallest window, proj 40, would overflow) */
-        view.r80s5[i] = (int32_t)(((int64_t)view.right[i] * k32) >> 12);
-        view.d80s5[i] = (int32_t)(((int64_t)view.down[i] * k32) >> 12);
-        view.r16[0][i] = view.right[i] >> 2;
-        view.r16[1][i] = view.down[i] >> 2;
-        view.r16[2][i] = view.fwd[i] >> 2;
+        view_next.r80s5[i] = (int32_t)(((int64_t)view_next.right[i] * k32) >> 12);
+        view_next.d80s5[i] = (int32_t)(((int64_t)view_next.down[i] * k32) >> 12);
+        view_next.r16[0][i] = view_next.right[i] >> 2;
+        view_next.r16[1][i] = view_next.down[i] >> 2;
+        view_next.r16[2][i] = view_next.fwd[i] >> 2;
     }
     /* camera . basis row in 15.17 (same scale as 13.3 vertex x 2.14 basis) */
     for (i = 0; i < 3; i++)
-        view.camr[i] = (int32_t)(((int64_t)org[0] * view.r16[i][0] + (int64_t)org[1] * view.r16[i][1]
-                                  + (int64_t)org[2] * view.r16[i][2]) >> 13);
+        view_next.camr[i] = (int32_t)(((int64_t)org[0] * view_next.r16[i][0] + (int64_t)org[1] * view_next.r16[i][1]
+                                  + (int64_t)org[2] * view_next.r16[i][2]) >> 13);
 }
 
 /* camr for each mover's vertices: the camera seen from the mover's frame */
@@ -110,12 +107,12 @@ void r_mover_cam(int n)
     int m, i;
     for (m = 0; m < n; m++) {
         fixed_t o[3];
-        o[0] = view.org[0] - view.mres[m][0];
-        o[1] = view.org[1] - view.mres[m][1];
-        o[2] = view.org[2] - view.mres[m][2];
+        o[0] = view_next.org[0] - view_next.mres[m][0];
+        o[1] = view_next.org[1] - view_next.mres[m][1];
+        o[2] = view_next.org[2] - view_next.mres[m][2];
         for (i = 0; i < 3; i++)
-            view.mcamr[m][i] = (int32_t)(((int64_t)o[0] * view.r16[i][0] + (int64_t)o[1] * view.r16[i][1]
-                                          + (int64_t)o[2] * view.r16[i][2]) >> 13);
+            view_next.mcamr[m][i] = (int32_t)(((int64_t)o[0] * view_next.r16[i][0] + (int64_t)o[1] * view_next.r16[i][1]
+                                          + (int64_t)o[2] * view_next.r16[i][2]) >> 13);
     }
 }
 
@@ -144,19 +141,19 @@ static void mark_leaf(int leaf)
 {
     const lleaf_t *lf = &lvl.leafs[leaf];
     int i, n;
-    BIT_SET(vis_leafs, leaf);
+    BIT_SET(vis.leafs, leaf);
     for (i = 0; i < lf->nummark; i++) {
         int f = lvl.marksurf[lf->firstmark + i];
         if (f != 0xFFFF) {
             int g = lvl.flatof[f];
-            BIT_SET(vis_faces, f);
+            BIT_SET(vis.faces, f);
             if (g != 0xFFFF)
-                BIT_SET(vis_faces, g);  /* the merged face it is part of */
+                BIT_SET(vis.faces, g);  /* the merged face it is part of */
         }
     }
     n = lf->parent;
-    while (n >= 0 && !BIT_TEST(vis_nodes, n)) {
-        BIT_SET(vis_nodes, n);
+    while (n >= 0 && !BIT_TEST(vis.nodes, n)) {
+        BIT_SET(vis.nodes, n);
         n = lvl.nodeparent[n];
     }
 }
@@ -166,9 +163,7 @@ void r_markleaves(int leaf)
     const lleaf_t *lf = &lvl.leafs[leaf];
     int i;
 
-    memset(vis_leafs, 0, sizeof(vis_leafs));
-    memset(vis_nodes, 0, sizeof(vis_nodes));
-    memset(vis_faces, 0, sizeof(vis_faces));
+    memset(&vis, 0, sizeof(vis));
 
     if (leaf == 0 || lf->visofs < 0) {
         for (i = 1; i <= lvl.visleafs; i++)
@@ -197,14 +192,31 @@ void r_markleaves(int leaf)
     mark_leaf(leaf);
 }
 
+/* the prepared view and BSP walk become the ones drawn (both CPUs idle) */
+void r_commit(void)
+{
+    memcpy(&view, &view_next, sizeof(view));
+    if (cand_ready) {
+        cand_cur ^= 1;
+        cand_ready = 0;
+    }
+}
+
 /* ------------------------------------------------------------------ BSP walk */
 
+/* Stage A, the BSP walk, runs once per frame for the whole window: the
+ * master walks the next frame's tree (view_next, vis) into the spare
+ * candidate list while both CPUs draw from the current one, and each CPU
+ * then culls the candidates against its own band in stage B. */
+typedef struct { fixed_t n[CP_NUM][3]; fixed_t d[CP_NUM]; } frustum_t;
+static frustum_t wfr;               /* the next frame's whole-window frustum */
+
 /* returns -1 if the box is outside, else the remaining clip flags */
-static int cull_box(const rcpu_t *rc, const int16_t *mins, const int16_t *maxs, int clipflags)
+static int cull_box(const int16_t *mins, const int16_t *maxs, int clipflags)
 {
     int k, m;
     for (k = 0, m = 1; k < CP_NUM; k++, m <<= 1) {
-        const fixed_t *n = rc->fr_n[k];
+        const fixed_t *n = wfr.n[k];
         int32_t dmax, dmin;
         if (!(clipflags & m))
             continue;
@@ -214,77 +226,81 @@ static int cull_box(const rcpu_t *rc, const int16_t *mins, const int16_t *maxs, 
         else           { dmax += n[1] * mins[1]; dmin += n[1] * maxs[1]; }
         if (n[2] >= 0) { dmax += n[2] * maxs[2]; dmin += n[2] * mins[2]; }
         else           { dmax += n[2] * mins[2]; dmin += n[2] * maxs[2]; }
-        if (dmax < rc->fr_d[k])
+        if (dmax < wfr.d[k])
             return -1;
-        if (dmin >= rc->fr_d[k])
+        if (dmin >= wfr.d[k])
             clipflags &= ~m;
     }
     return clipflags;
 }
 
-static inline void add_cand(rcpu_t *rc, int fi, int clip)
+static inline void add_cand(candlist_t *cl, int fi, int clip)
 {
-    if (rc->ncand < MAXCAND)
-        rc->cand[rc->ncand++] = (uint32_t)fi | ((uint32_t)clip << 16);
+    int n = cl->n;
+    if (n < MAXCAND) {
+        cl->face[n] = fi;
+        cl->clip[n] = clip;
+        cl->n = n + 1;
+    }
 }
 
-static void walk_leaf(rcpu_t *rc, int leaf, int clipflags)
+static void walk_leaf(candlist_t *cl, const visset_t *vs, int leaf, int clipflags)
 {
     const lleaf_t *lf = &lvl.leafs[leaf];
     int i;
-    if (!lf->numfrag || !BIT_TEST(vis_leafs, leaf))
+    if (!lf->numfrag || !BIT_TEST(vs->leafs, leaf))
         return;
-    clipflags = cull_box(rc, lf->mins, lf->maxs, clipflags);
+    clipflags = cull_box(lf->mins, lf->maxs, clipflags);
     if (clipflags < 0)
         return;
     for (i = 0; i < lf->numfrag; i++) {
         int fi = lvl.leaffrags[lf->firstfrag + i];
         const lface_t *f = &lvl.faces[fi];
         const lplane_t *pl = &lvl.planes[f->plane];
-        fixed_t d = dot16(pl->n, view.org) - pl->dist;
+        fixed_t d = dot16(pl->n, view_next.org) - pl->dist;
         if (f->pad) {
             /* a moving model's fragment: only its current keyframe */
             int m = (f->pad & 0xFF) - 1;
-            if ((f->pad >> 8) != view.mkey[m])
+            if ((f->pad >> 8) != view_next.mkey[m])
                 continue;
-            d -= dot16(pl->n, view.mres[m]);
+            d -= dot16(pl->n, view_next.mres[m]);
         }
         if ((d < 0) != ((f->flags & FF_PLANEBACK) != 0))
             continue;
-        add_cand(rc, fi, clipflags);
+        add_cand(cl, fi, clipflags);
     }
 }
 
-/* stage A: front-to-back BSP walk collecting candidate faces, with an
- * explicit stack (the CPU stack lives in 2 KB of on-chip RAM) */
+/* front-to-back walk with an explicit stack (the CPU stack lives in 2 KB of
+ * on-chip RAM in the FAST build) */
 #define WALK_STACK 72
 
-static void walk_bsp(rcpu_t *rc)
+static void walk_bsp(candlist_t *cl, const visset_t *vs)
 {
     uint32_t stack[WALK_STACK];
     int sp = 0, num = lvl.hdr->headnode, clip = (1 << CP_NUM) - 1;
+    const int flat = !view_next.textures;
 
-    rc->ncand = 0;
+    cl->n = 0;
     for (;;) {
         while (num >= 0) {
             const lnode_t *node;
             int side;
-            if (!BIT_TEST(vis_nodes, num))
+            if (!BIT_TEST(vs->nodes, num))
                 goto pop;
             node = &lvl.nodes[num];
             if (clip) {
-                clip = cull_box(rc, node->mins, node->maxs, clip);
+                clip = cull_box(node->mins, node->maxs, clip);
                 if (clip < 0)
                     goto pop;
             }
-            rc->nodes++;
-            side = node_side(node, view.org);
+            side = node_side(node, view_next.org);
             if (sp == WALK_STACK)
                 goto pop;           /* cannot happen with E1M1 (depth 63) */
             stack[sp++] = (uint32_t)num | ((uint32_t)side << 16) | ((uint32_t)clip << 17);
             num = node->child[side];
         }
-        walk_leaf(rc, -1 - num, clip);
+        walk_leaf(cl, vs, -1 - num, clip);
     pop:
         if (sp == 0)
             return;
@@ -296,7 +312,7 @@ static void walk_bsp(rcpu_t *rc)
             side = (e >> 16) & 1;
             clip = e >> 17;
             node = &lvl.nodes[num];
-            if (!view.textures) {
+            if (flat) {
                 /* flat shading: the node's faces with same-coloured
                    neighbours merged (front-facing first, then back) */
                 const lflatnode_t *fn = &lvl.flatnode[num];
@@ -308,8 +324,8 @@ static void walk_bsp(rcpu_t *rc)
                     nf = fn->nfront;
                 for (i = 0; i < nf; i++) {
                     int fi = fl[i];
-                    if (BIT_TEST(vis_faces, fi))
-                        add_cand(rc, fi, clip);
+                    if (BIT_TEST(vs->faces, fi))
+                        add_cand(cl, fi, clip);
                 }
             } else {
                 /* faces are stored front-facing first, then back-facing */
@@ -322,13 +338,37 @@ static void walk_bsp(rcpu_t *rc)
                 }
                 for (i = 0; i < nf; i++) {
                     int fi = ff + i;
-                    if (BIT_TEST(vis_faces, fi))
-                        add_cand(rc, fi, clip);
+                    if (BIT_TEST(vs->faces, fi))
+                        add_cand(cl, fi, clip);
                 }
             }
             num = node->child[!side];
         }
     }
+}
+
+static void wfr_plane(int k, fixed_t a, fixed_t b, fixed_t c, fixed_t e)
+{
+    int i;
+    for (i = 0; i < 3; i++)
+        wfr.n[k][i] = fixmul(a, view_next.right[i]) + fixmul(b, view_next.down[i]) + fixmul(c, view_next.fwd[i]);
+    wfr.d[k] = dot16(wfr.n[k], view_next.org) + e;
+}
+
+/* the next frame's candidates: after r_setup_view, r_markleaves and the
+ * movers' state (g_build_scene) */
+void r_walk(void)
+{
+    fixed_t ky0 = hw_div(-view_next.cy16, view_next.proj);
+    fixed_t ky1 = hw_div((view_next.vh << 16) - view_next.cy16, view_next.proj);
+    wfr_plane(CP_NEAR, 0, 0, 0x10000, NEAR_Z);
+    wfr_plane(CP_FAR, 0, 0, -0x10000, -view_next.far);
+    wfr_plane(CP_LEFT, 0x10000, 0, 0x10000, 0);
+    wfr_plane(CP_RIGHT, -0x10000, 0, 0x10000, 0);
+    wfr_plane(CP_TOP, 0, 0x10000, -ky0, 0);
+    wfr_plane(CP_BOTTOM, 0, -0x10000, ky1, 0);
+    walk_bsp(&cands[cand_cur ^ 1], &vis);
+    cand_ready = 1;
 }
 
 /* ------------------------------------------------------------------ stage D */
@@ -490,10 +530,9 @@ void r_render(rcpu_t *rc, int row0, int row1)
     rc->fb_ready = 0;
     r_depth_clear(rc);
 
-    walk_bsp(rc);
     ci = 0;
-    while (ci < rc->ncand && rc->rowsleft > 0) {
-        ci = geom_polys(rc, ci);
+    while (ci < cands[cand_cur].n && rc->rowsleft > 0) {
+        ci = geom_polys(rc, &cands[cand_cur], ci);
         geom_raster(rc);
         draw_batch(rc);
     }

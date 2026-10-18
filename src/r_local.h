@@ -10,7 +10,7 @@
 #define MAXGAPS     24
 #define MAXCLIPVERTS 24
 
-#define MAXCAND     768         /* candidate faces from the BSP walk */
+#define MAXCAND     1024        /* candidate faces from the BSP walk, whole window (E1M1-E1M3 peak about 650) */
 #define BATCH       32          /* faces per pipeline batch */
 #define POLYWORDS   1280        /* screen polygon buffer for one batch */
 #ifndef MAXSPANS
@@ -130,8 +130,6 @@ typedef struct {
     fixed_t  fr_len[6];              /* |fr_n| (planes are not normalized) */
 
     /* pipeline buffers */
-    int      ncand;
-    uint32_t cand[MAXCAND];          /* face | clipflags << 16 */
     int      npolyw;
     int32_t  poly[POLYWORDS];
     int      nfrec;
@@ -166,8 +164,35 @@ typedef struct {
     int facecalls, vxforms, clips, leaves;
 } rcpu_t;
 
-extern view_t view;
-extern uint8_t vis_leafs[], vis_nodes[], vis_faces[];
+/* The renderer reads `view`. The master prepares the next frame's view in
+ * `view_next` (and its BSP walk) while the slave still draws the current
+ * one; r_commit() makes it current between frames, when both CPUs are idle. */
+extern view_t view, view_next;
+
+#define MAX_MAP_LEAFS 4096
+#define MAX_MAP_NODES 4096
+#define MAX_MAP_FACES 10240         /* (tools/mkmap.py checks) */
+
+/* the BSP walk's candidate faces for the whole window, front to back */
+typedef struct {
+    int      n;
+    uint16_t face[MAXCAND];
+    uint8_t  clip[MAXCAND];          /* frustum planes the face may still cross */
+} candlist_t;
+extern candlist_t cands[2];
+extern int cand_cur;
+
+/* the PVS bits of the newest view: only the BSP walk (for the next frame)
+ * and the game read them, so one set is enough */
+typedef struct {
+    uint8_t leafs[MAX_MAP_LEAFS / 8];
+    uint8_t nodes[MAX_MAP_NODES / 8];
+    uint8_t faces[MAX_MAP_FACES / 8];
+} visset_t;
+extern visset_t vis;
+#define vis_leafs (vis.leafs)
+#define vis_nodes (vis.nodes)
+#define vis_faces (vis.faces)
 extern uint8_t colormap[64 * 256];
 extern gaprow_t gaps[SCREENH];
 extern volatile uint16_t *r_fb;      /* view window origin; 160 words per rendered row */
@@ -220,12 +245,20 @@ void r_init(void);
 void r_setup_view(fixed_t org[3], int yaw, int pitch);
 void r_mover_cam(int nmovers);
 void r_markleaves(int leaf);
+void r_commit(void);
+void r_walk(void);
 int  r_pointleaf(const fixed_t p[3]);
 void r_render(rcpu_t *rc, int row0, int row1);
 
 /* r_geom.c: candidate faces -> screen polygons -> spans */
-int  geom_polys(rcpu_t *rc, int ci);
+int  geom_polys(rcpu_t *rc, const candlist_t *cl, int ci);
 void geom_raster(rcpu_t *rc);
+void span_overflow(rcpu_t *rc);
+int  make_poly_c(rcpu_t *rc, int fi, int clip, int32_t *out);
+int  make_poly_clip(rcpu_t *rc, int fi, int ocor, int32_t *out);
+int  make_poly_asm(rcpu_t *rc, int fi, int clip, int32_t *out);                      /* geom_asm.S */
+void r_cover_black(rcpu_t *rc, int y, int x0, int x1);
+void raster_solid(rcpu_t *rc, int n, const fixed_t *sx, const fixed_t *sy);   /* raster_asm.S */
 
 /* r_setup.c */
 int  face_setup(rcpu_t *rc, frec_t *fr);

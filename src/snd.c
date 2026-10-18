@@ -312,10 +312,23 @@ static int silent_bufs;
 
 #define HALF (BUFSAMPLES / 2)
 
+/* v >> 7 (arithmetic): GCC calls a library routine for it on the SH-2,
+   the multiplier's high word does it in two instructions */
+static inline int32_t sar7(int32_t v)
+{
+#ifdef HOST
+    return v >> 7;
+#else
+    int32_t r;
+    __asm__("dmuls.l %1,%2\n\tsts mach,%0" : "=r"(r) : "r"(v), "r"(1 << 25) : "macl", "mach");
+    return r;
+#endif
+}
+
 /* one output word: both pulse widths, clamped */
 static inline uint32_t pack(int32_t al, int32_t ar, int mid, int top)
 {
-    int l = mid + (al >> 7), r = mid + (ar >> 7);
+    int l = mid + sar7(al), r = mid + sar7(ar);
     if (l < 1) l = 1;
     if (l > top) l = top;
     if (r < 1) r = 1;

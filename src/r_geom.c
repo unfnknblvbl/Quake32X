@@ -23,7 +23,10 @@ static inline fixed_t clipdist(const rcpu_t *rc, int k, const vec3_t *v)
     }
 }
 
-static int clip_poly(const rcpu_t *rc, int k, const vec3_t *in, int n, vec3_t *out)
+/* clip against plane k; tags follow the vertices: the original vertex
+ * index (its projection is already known) or -1 for a new one */
+static int clip_poly(const rcpu_t *rc, int k, const vec3_t *in, const int8_t *tin, int n,
+                     vec3_t *out, int8_t *tout)
 {
     const vec3_t *p0 = &in[n - 1];
     fixed_t d0 = clipdist(rc, k, p0);
@@ -40,10 +43,13 @@ static int clip_poly(const rcpu_t *rc, int k, const vec3_t *in, int n, vec3_t *o
             out[m].x = a->x + fixmul(b->x - a->x, t);
             out[m].y = a->y + fixmul(b->y - a->y, t);
             out[m].z = a->z + fixmul(b->z - a->z, t);
+            tout[m] = -1;
             m++;
         }
-        if (d1 >= 0)
+        if (d1 >= 0) {
+            tout[m] = tin[i];
             out[m++] = *p1;
+        }
         p0 = p1;
         d0 = d1;
     }
@@ -142,10 +148,13 @@ static inline int sphere_clip(const rcpu_t *rc, const lfgeom_t *sp, int clip)
     return clip;
 }
 
+
 /* one candidate -> polygon record in rc->poly; returns words used (0 = culled).
  * Vertex cache entries are copied out immediately: a later vertex of the
- * same face may map to the same cache slot. */
-static int make_poly(rcpu_t *rc, int fi, int clip, int32_t *out)
+ * same face may map to the same cache slot. (On the 32X, geom_asm.S does
+ * this; the C version is for the host and -DC_GEOM.) */
+#if defined(HOST) || defined(C_GEOM)
+int make_poly_c(rcpu_t *rc, int fi, int clip, int32_t *out)
 {
     const lfgeom_t *g = &lvl.fgeom[fi];
     int i, n = g->numverts, ocand = 0xFF, ocor = 0;
@@ -178,31 +187,57 @@ static int make_poly(rcpu_t *rc, int fi, int clip, int32_t *out)
     if (ocand & clip)
         return 0;                       /* all vertices outside one plane */
     ocor &= clip;
+    if (ocor)
+        return make_poly_clip(rc, fi, ocor, out);
+    if (zmin < NEAR_Z) zmin = NEAR_Z;
+    if (out[4] < NEAR_Z) out[4] = NEAR_Z;
+    out[0] = fi | (n << 16);
+    out[1] = zmin;
+    return 5 + 2 * n;
+}
+#endif
 
-    if (ocor) {
-        vec3_t *in = rc->clipa, *o = rc->clipb, *t;
-        int k, m;
-        rc->clips++;
-        for (i = 0; i < n; i++)
-            in[i] = get_vert(rc, fv[i])->v;
-        for (k = 0, m = 1; k < CP_NUM; k++, m <<= 1) {
-            if (!(ocor & m))
-                continue;
-            n = clip_poly(rc, k, in, n, o);
-            if (n < 3)
-                return 0;
-            t = in; in = o; o = t;
-        }
-        sy = sx + n;
-        zmin = 0x7FFFFFFF;
-        for (i = 0; i < n; i++) {
-            project(rc, &in[i], &sx[i], &sy[i]);
-            if (in[i].z < zmin) zmin = in[i].z;
-        }
-        out[2] = in[0].x;
-        out[3] = in[0].y;
-        out[4] = in[0].z;
+/* the rest of make_poly for a face that crosses the planes in ocor: out[5..]
+ * holds its vertices' projections (x, then y), which the vertices that stay
+ * keep; only the new ones are projected (geom_asm.S comes here too) */
+int make_poly_clip(rcpu_t *rc, int fi, int ocor, int32_t *out)
+{
+    const lfgeom_t *g = &lvl.fgeom[fi];
+    const uint16_t *fv = &lvl.fverts[g->firstvert];
+    int i, k, m, n = g->numverts;
+    vec3_t *in = rc->clipa, *o = rc->clipb, *t;
+    int8_t tags[2][MAXCLIPVERTS], *tin = tags[0], *to = tags[1], *tt;
+    fixed_t sx0[MAXCLIPVERTS - CP_NUM], sy0[MAXCLIPVERTS - CP_NUM], zmin, *sx = out + 5, *sy;
+
+    rc->clips++;
+    for (i = 0; i < n; i++) {
+        in[i] = get_vert(rc, fv[i])->v;
+        tin[i] = i;
+        sx0[i] = sx[i];
+        sy0[i] = sx[n + i];
     }
+    for (k = 0, m = 1; k < CP_NUM; k++, m <<= 1) {
+        if (!(ocor & m))
+            continue;
+        n = clip_poly(rc, k, in, tin, n, o, to);
+        if (n < 3)
+            return 0;
+        t = in; in = o; o = t;
+        tt = tin; tin = to; to = tt;
+    }
+    sy = sx + n;
+    zmin = 0x7FFFFFFF;
+    for (i = 0; i < n; i++) {
+        if (tin[i] >= 0) {
+            sx[i] = sx0[tin[i]];
+            sy[i] = sy0[tin[i]];
+        } else
+            project(rc, &in[i], &sx[i], &sy[i]);
+        if (in[i].z < zmin) zmin = in[i].z;
+    }
+    out[2] = in[0].x;
+    out[3] = in[0].y;
+    out[4] = in[0].z;
     if (zmin < NEAR_Z) zmin = NEAR_Z;
     if (out[4] < NEAR_Z) out[4] = NEAR_Z;
     out[0] = fi | (n << 16);
@@ -211,12 +246,20 @@ static int make_poly(rcpu_t *rc, int fi, int clip, int32_t *out)
 }
 
 /* stage B: fill the polygon buffer from candidates ci.. ; returns next ci */
-int geom_polys(rcpu_t *rc, int ci)
+int geom_polys(rcpu_t *rc, const candlist_t *cl, int ci)
 {
-    int npoly = 0, w = 0;
-    while (ci < rc->ncand && npoly < BATCH && w <= POLYWORDS - (5 + 2 * MAXCLIPVERTS)) {
-        uint32_t c = rc->cand[ci++];
-        int used = make_poly(rc, c & 0xFFFF, c >> 16, rc->poly + w);
+    int npoly = 0, w = 0, n = cl->n;
+    while (ci < n && npoly < BATCH && w <= POLYWORDS - (5 + 2 * MAXCLIPVERTS)) {
+        /* the walk culled against the whole window: this CPU's band
+           (top and bottom planes) is tested here */
+#if defined(HOST) || defined(C_GEOM)
+        int used = make_poly_c(rc, cl->face[ci], cl->clip[ci] | (1 << CP_TOP) | (1 << CP_BOTTOM),
+                               rc->poly + w);
+#else
+        int used = make_poly_asm(rc, cl->face[ci], cl->clip[ci] | (1 << CP_TOP) | (1 << CP_BOTTOM),
+                                 rc->poly + w);     /* geom_asm.S */
+#endif
+        ci++;
         if (used) {
             w += used;
             npoly++;
@@ -228,7 +271,7 @@ int geom_polys(rcpu_t *rc, int ci)
 
 /* ------------------------------------------------------------ coverage */
 
-static NOINLINE void span_overflow(rcpu_t *rc)
+NOINLINE void span_overflow(rcpu_t *rc)
 {
     /* span buffer full: draw what we have (including the current face's
        spans so far) and continue with a fresh copy of its record */
@@ -256,6 +299,14 @@ static inline void emit_span(rcpu_t *rc, int y, int x0, int x1)
 #else
     *(uint32_t *)s = ((uint32_t)y << 24) | ((uint32_t)x0 << 16) | ((uint32_t)x1 << 8);
 #endif
+}
+
+/* out of gap slots: paint [x0, x1) of row y black and drop it */
+NOINLINE void r_cover_black(rcpu_t *rc, int y, int x0, int x1)
+{
+    volatile uint16_t *d = r_fb + y * SCREENW;
+    wait_fb(rc);
+    for (; x0 < x1; x0++) d[x0] = 0;
 }
 
 /* clip [xs,xe) on row y against the uncovered gaps of that row */
@@ -298,13 +349,8 @@ static void cover_row(rcpu_t *rc, int y, int xs, int xe)
             g[i * 2 + 2] = xe;
             g[i * 2 + 3] = ge;
             n++;
-        } else {
-            /* out of gap slots: paint the remainder black and drop it */
-            volatile uint16_t *d = r_fb + y * SCREENW;
-            int x;
-            wait_fb(rc);
-            for (x = xe; x < ge; x++) d[x] = 0;
-        }
+        } else
+            r_cover_black(rc, y, xe, ge);   /* out of gap slots */
         g[i * 2 + 1] = xs;
         break;
     }
@@ -473,7 +519,11 @@ void geom_raster(rcpu_t *rc)
                 rc->nwfrec++;
         } else {
             rc->cur = fr;
+#if defined(HOST) || defined(C_RASTER)
             raster_poly(rc, n, p + 5, p + 5 + n, 0);
+#else
+            raster_solid(rc, n, p + 5, p + 5 + n);  /* raster_asm.S */
+#endif
             fr = rc->cur;               /* may have moved on span overflow */
             fr->nspan = rc->nspans - fr->span0;
             if (fr->nspan)

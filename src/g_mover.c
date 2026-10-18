@@ -11,7 +11,7 @@
 const lmover_t *lmovers;
 int nmovers;
 fixed_t mover_off[MAX_MOVERS][3];
-static uint8_t rs_valid[MAX_MOVERS];    /* view.mkey/mres hold this mover's position */
+static uint8_t rs_valid[MAX_MOVERS];    /* view_next.mkey/mres hold this mover's position */
 static const ltrigger_t *ltrigs;
 static int ntrigs;
 static const int16_t *mkeys;
@@ -793,9 +793,9 @@ GCODE void mv_render_state(void)
         uint32_t bestd = 0xFFFFFFFF;
         if (rs_valid[m]) {
             /* not moved since last frame: its keyframe and the rest stand */
-            const int16_t *kk = key + view.mkey[m] * 3;
-            if (mover_off[m][0] == FX(kk[0]) + view.mres[m][0] && mover_off[m][1] == FX(kk[1]) + view.mres[m][1]
-                && mover_off[m][2] == FX(kk[2]) + view.mres[m][2])
+            const int16_t *kk = key + view_next.mkey[m] * 3;
+            if (mover_off[m][0] == FX(kk[0]) + view_next.mres[m][0] && mover_off[m][1] == FX(kk[1]) + view_next.mres[m][1]
+                && mover_off[m][2] == FX(kk[2]) + view_next.mres[m][2])
                 continue;
         }
         rs_valid[m] = 1;
@@ -809,9 +809,9 @@ GCODE void mv_render_state(void)
             }
         }
         key = mkeys + (l->firstkey + best) * 3;
-        view.mkey[m] = best;
+        view_next.mkey[m] = best;
         for (k = 0; k < 3; k++)
-            view.mres[m][k] = mover_off[m][k] - FX(key[k]);
+            view_next.mres[m][k] = mover_off[m][k] - FX(key[k]);
     }
     r_mover_cam(nmovers);
 }

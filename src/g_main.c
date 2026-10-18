@@ -9,7 +9,7 @@
 ent_t ents[MAX_ENTS];
 pstate_t ps;
 particle_t particles[MAX_PARTICLES];
-scene_t scene;
+scene_t scene, scene_next;     /* drawn; being prepared for the next frame */
 uint32_t level_time;
 const lent_t *lents;
 int nlents;
@@ -988,31 +988,31 @@ static int model_rect(const lmodel_t *m, int frame, const fixed_t org[3], uint16
         fixed_t mz = m->origin[2] + m->scale[2] * bb[(k & 4) ? 5 : 2];
         fixed_t w[3], x, y, z;
         int32_t inv;
-        w[0] = org[0] + fixmul(cy, mx) - fixmul(sy, my) - view.org[0];
-        w[1] = org[1] + fixmul(sy, mx) + fixmul(cy, my) - view.org[1];
-        w[2] = org[2] + mz - view.org[2];
-        z = dot16(w, view.fwd);
+        w[0] = org[0] + fixmul(cy, mx) - fixmul(sy, my) - view_next.org[0];
+        w[1] = org[1] + fixmul(sy, mx) + fixmul(cy, my) - view_next.org[1];
+        w[2] = org[2] + mz - view_next.org[2];
+        z = dot16(w, view_next.fwd);
         if (z < zmin) zmin = z;
         if (z < FX(8)) {
             behind++;
             continue;
         }
-        x = dot16(w, view.right);
-        y = dot16(w, view.down);
-        inv = hw_div64((int64_t)view.proj << 32, z);           /* pixels per unit */
-        x = view.cx16 + fixmul(x, inv);
-        y = view.cy16 + fixmul(y, inv);
+        x = dot16(w, view_next.right);
+        y = dot16(w, view_next.down);
+        inv = hw_div64((int64_t)view_next.proj << 32, z);           /* pixels per unit */
+        x = view_next.cx16 + fixmul(x, inv);
+        y = view_next.cy16 + fixmul(y, inv);
         if (first || x < xmin) xmin = x;
         if (first || x > xmax) xmax = x;
         if (first || y < ymin) ymin = y;
         if (first || y > ymax) ymax = y;
         first = 0;
     }
-    if (behind == 8 || zmin > view.far)
+    if (behind == 8 || zmin > view_next.far)
         return 0;
     *dist = zmin < 0 ? 0 : UNITS(zmin);
     if (behind) {
-        rect[0] = 0; rect[1] = 0; rect[2] = view.vw; rect[3] = view.vh;
+        rect[0] = 0; rect[1] = 0; rect[2] = view_next.vw; rect[3] = view_next.vh;
         return 1;
     }
     x0 = (xmin >> 16) - 1;
@@ -1021,8 +1021,8 @@ static int model_rect(const lmodel_t *m, int frame, const fixed_t org[3], uint16
     y1 = (ymax >> 16) + 2;
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
-    if (x1 > view.vw) x1 = view.vw;
-    if (y1 > view.vh) y1 = view.vh;
+    if (x1 > view_next.vw) x1 = view_next.vw;
+    if (y1 > view_next.vh) y1 = view_next.vh;
     if (x0 >= x1 || y0 >= y1)
         return 0;
     rect[0] = x0; rect[1] = y0; rect[2] = x1; rect[3] = y1;
@@ -1033,7 +1033,7 @@ static void add_rect(const int16_t r[4])
 {
     int y;
     for (y = r[1]; y < r[3]; y++) {
-        zrow_t *z = &scene.zrow[y];
+        zrow_t *z = &scene_next.zrow[y];
         if (z->x1 <= z->x0) {
             z->x0 = r[0];
             z->x1 = r[2];
@@ -1047,8 +1047,8 @@ static void add_rect(const int16_t r[4])
 static int layout_zrows(void)
 {
     int y, used = 0;
-    for (y = 0; y < view.vh; y++) {
-        zrow_t *z = &scene.zrow[y];
+    for (y = 0; y < view_next.vh; y++) {
+        zrow_t *z = &scene_next.zrow[y];
         z->ofs = used;
         if (z->x1 > z->x0)
             used += z->x1 - z->x0;
@@ -1069,12 +1069,12 @@ static void add_draw(const lmodel_t *m, int frame, int skin, const fixed_t org[3
     if (!model_rect(m, frame, org, yaw, rect, &dist))
         return;
     if (ndraw < MAX_DRAW) {
-        d = &scene.draw[ndraw++];
+        d = &scene_next.draw[ndraw++];
     } else {
-        d = &scene.draw[0];
+        d = &scene_next.draw[0];
         for (i = 1; i < MAX_DRAW; i++)
-            if (scene.draw[i].dist > d->dist)
-                d = &scene.draw[i];
+            if (scene_next.draw[i].dist > d->dist)
+                d = &scene_next.draw[i];
         if (d->dist <= dist)
             return;
     }
@@ -1097,7 +1097,7 @@ static void add_draw(const lmodel_t *m, int frame, int skin, const fixed_t org[3
 GCODE void g_build_scene(void)
 {
     int i, n;
-    scene.ndraw = 0;
+    scene_next.ndraw = 0;
     ndraw = 0;
     mv_render_state();
     for (i = 0; i < MAX_ENTS; i++) {
@@ -1134,36 +1134,36 @@ GCODE void g_build_scene(void)
        back to front without it */
     for (;;) {
         int big = -1, area = 0;
-        memset(scene.zrow, 0, sizeof(scene.zrow));
+        memset(scene_next.zrow, 0, sizeof(scene_next.zrow));
         for (i = 0; i < n; i++)
-            if (scene.draw[i].mode == DM_DEPTH)
-                add_rect(scene.draw[i].rect);
-        scene.zused = layout_zrows();
-        if (scene.zused <= ZBUF_MAX)
+            if (scene_next.draw[i].mode == DM_DEPTH)
+                add_rect(scene_next.draw[i].rect);
+        scene_next.zused = layout_zrows();
+        if (scene_next.zused <= ZBUF_MAX)
             break;
         for (i = 0; i < n; i++) {
-            const int16_t *r = scene.draw[i].rect;
+            const int16_t *r = scene_next.draw[i].rect;
             int a = (r[2] - r[0]) * (r[3] - r[1]);
-            if (scene.draw[i].mode == DM_DEPTH && a > area) {
+            if (scene_next.draw[i].mode == DM_DEPTH && a > area) {
                 area = a;
                 big = i;
             }
         }
-        scene.draw[big].mode = DM_SORTED;
+        scene_next.draw[big].mode = DM_SORTED;
     }
     /* sorted models are drawn far to near */
     for (i = 1; i < n; i++) {
-        drawent_t t = scene.draw[i];
+        drawent_t t = scene_next.draw[i];
         int j = i;
-        while (j > 0 && scene.draw[j - 1].dist < t.dist) {
-            scene.draw[j] = scene.draw[j - 1];
+        while (j > 0 && scene_next.draw[j - 1].dist < t.dist) {
+            scene_next.draw[j] = scene_next.draw[j - 1];
             j--;
         }
-        scene.draw[j] = t;
+        scene_next.draw[j] = t;
     }
     /* particles: those in a potentially visible leaf; the depth test, where
        there is depth, sorts out the rest */
-    scene.nparts = 0;
+    scene_next.nparts = 0;
     for (i = 0; i < MAX_PARTICLES && level_time <= part_until; i++) {
         particle_t *p = &particles[i];
         p->type &= ~PT_VISIBLE;
@@ -1171,11 +1171,23 @@ GCODE void g_build_scene(void)
             continue;
         if (LEAF_VISIBLE(p->leaf)) {
             p->type |= PT_VISIBLE;
-            scene.nparts++;
+            scene_next.nparts++;
         }
     }
     /* the view weapon is a Mega Drive sprite (main.c, mdlink.c) */
-    scene.ndraw = n;
+    scene_next.ndraw = n;
+}
+
+/* the prepared scene becomes the one drawn (both CPUs idle) */
+void g_commit_scene(void)
+{
+    int i;
+    scene.ndraw = scene_next.ndraw;
+    for (i = 0; i < scene_next.ndraw; i++)
+        scene.draw[i] = scene_next.draw[i];
+    scene.nparts = scene_next.nparts;
+    scene.zused = scene_next.zused;
+    memcpy(scene.zrow, scene_next.zrow, sizeof(scene.zrow));
 }
 
 /* ------------------------------------------------------------ status bar */

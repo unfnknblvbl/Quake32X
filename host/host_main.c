@@ -38,14 +38,14 @@ int main(int argc, char **argv)
     r_init();
     r_span_init();
     r_fb = r_screen = fbmem;
-    view.vw = SCREENW;
-    view.vh = SCREENH;
+    view_next.vw = SCREENW;
+    view_next.vh = SCREENH;
     if (getenv("VW")) {            /* reduced screen size: VW=width VH=height */
-        view.vw = atoi(getenv("VW"));
-        view.vh = atoi(getenv("VH"));
-        r_fb = fbmem + ((SCREENH - view.vh) >> 1) * SCREENW + ((SCREENW - view.vw) >> 1);
+        view_next.vw = atoi(getenv("VW"));
+        view_next.vh = atoi(getenv("VH"));
+        r_fb = fbmem + ((SCREENH - view_next.vh) >> 1) * SCREENW + ((SCREENW - view_next.vw) >> 1);
     }
-    view.mesh = getenv("MESH") ? atoi(getenv("MESH")) : 0;
+    view_next.mesh = getenv("MESH") ? atoi(getenv("MESH")) : 0;
     for (k = 0; k < 2; k++) {
         rc[k].cpu = k;
         r_arena(&rc[k], malloc(SURFCACHE), SURFCACHE, hash[k], getenv("MESH") && atoi(getenv("MESH")));
@@ -56,22 +56,24 @@ int main(int argc, char **argv)
     org[2] = (fixed_t)(atof(argv[5]) * 65536);
     yaw = (int)(atof(argv[6]) * 65536 / 360) & 0xFFFF;
     pitch = (int)(atof(argv[7]) * 65536 / 360);
-    view.textures = argc > 8 ? atoi(argv[8]) : 1;
-    view.lighting = argc > 9 ? atoi(argv[9]) : 1;
-    view.far = (argc > 10 ? atoi(argv[10]) : 4096) << 16;
-    split = view.vh / 2;
+    view_next.textures = argc > 8 ? atoi(argv[8]) : 1;
+    view_next.lighting = argc > 9 ? atoi(argv[9]) : 1;
+    view_next.far = (argc > 10 ? atoi(argv[10]) : 4096) << 16;
+    split = view_next.vh / 2;
     if (argc > 11) split = atoi(argv[11]);
     if (argc > 12) frames = atoi(argv[12]);
 
     r_setup_view(org, yaw, pitch);
     leaf = r_pointleaf(org);
     r_markleaves(leaf);
+    r_walk();
     printf("leaf %d contents %d\n", leaf, lvl.leafs[leaf].contents);
 
     for (k = 0; k < frames; k++) {
-        view.time = k;
+        view_next.time = k;
+        r_commit();
         r_render(&rc[0], 0, split);
-        if (getenv("DUMPGAPS")) { extern void dump_gaps(int,int); dump_gaps(0, split); printf("ncand %d\n", rc[0].ncand); }
+        if (getenv("DUMPGAPS")) { extern void dump_gaps(int,int); dump_gaps(0, split); printf("ncand %d\n", cands[cand_cur].n); }
         r_render(&rc[1], split, view.vh);
     }
     for (k = 0; k < 2; k++)

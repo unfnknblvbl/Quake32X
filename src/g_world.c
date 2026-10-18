@@ -359,5 +359,5 @@ void g_relink(ent_t *e)
 int g_leaf_visible(const fixed_t p[3])
 {
     int leaf = r_pointleaf(p);
-    return leaf > 0 && BIT_TEST(vis_leafs, leaf);
+    return leaf > 0 && BIT_TEST(vis.leafs, leaf);
 }

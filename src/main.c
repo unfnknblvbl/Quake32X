@@ -23,8 +23,10 @@ volatile int32_t dbg_split, dbg_mspin, dbg_sspin;
 #define BAL_MAX 16
 #endif         /* frames a second x 10, for the logs and harnesses */
 
-/* the view weapon of the frame being drawn (the 68000 shows it at the flip) */
-static struct { int weapon, frame; } gun;
+/* the view weapon of the frame being drawn (the 68000 shows it at the flip),
+   and of the frame being prepared */
+typedef struct { int weapon, frame; } gun_t;
+static gun_t gun, gun_next;
 static int viewleaf = -1;
 static int md_flush;                /* send all of the next frame's Mega Drive layer */
 int g_mode = GM_PLAY;
@@ -39,7 +41,7 @@ int cur_level = -1;
 #define FREE_TOP     0x06040000      /* stacks are in on-chip RAM */
 #define CCR_PURGE    0x19            /* purge, keep two-way mode */
 #else
-#define FREE_TOP     0x0603E000      /* slave 2 KB and master 6 KB stacks above */
+#define FREE_TOP     0x0603E800      /* slave 2 KB and master 4 KB stacks above */
 #define CCR_PURGE    0x11            /* purge, 4-way cache */
 #endif
 
@@ -209,29 +211,39 @@ GCODE static void update_palette(int contents)
     *(volatile int32_t *)UNCACHED(&pal_dirty) = 1;
 }
 
+/* the menu settings into the next frame's view; the surface caches and the
+   window move only at the commit (the slave may still be drawing) */
 GCODE static void apply_settings(void)
 {
     const viewsize_t *vs = &view_sizes[cfg.size];
-    if (view.lighting != cfg.lighting)
-        view.cachegen++;
-    view.textures = cfg.textures;
-    view.lighting = cfg.lighting;
-    view.far = far_levels[cfg.far] << 16;
-    view.mesh = cfg.mesh;
-    if (arena_mesh != cfg.mesh) {
-        /* both CPUs are idle here; the slave purges its cache before the next frame */
-        arena_mesh = cfg.mesh;
-        r_arena(&rcpu[0], arena_base, arena_each, schash[0], cfg.mesh);
-        r_arena(&rcpu[1], arena_base + arena_each, arena_each, schash[1], cfg.mesh);
-    }
     int vh = vs->h < SCREENH - SBAR_H ? vs->h : SCREENH - SBAR_H;   /* above the status bar */
-    if (view.vw != vs->w || view.vh != vh) {
-        view.vw = vs->w;
-        view.vh = vh;
-        win_x = (SCREENW - vs->w) >> 1;
-        win_y = (SCREENH - SBAR_H - vh) >> 1;
-        r_fb = r_screen + win_y * SCREENW + win_x;
+    if (view_next.lighting != cfg.lighting)
+        view_next.cachegen++;
+    view_next.textures = cfg.textures;
+    view_next.lighting = cfg.lighting;
+    view_next.far = far_levels[cfg.far] << 16;
+    view_next.mesh = cfg.mesh;
+    view_next.vw = vs->w;
+    view_next.vh = vh;
+}
+
+/* the prepared frame becomes the one drawn: both CPUs are idle */
+static void commit_frame(void)
+{
+    int fs = view.flip_fs;
+    r_commit();
+    view.flip_fs = fs;
+    g_commit_scene();
+    gun = gun_next;
+    if (arena_mesh != view.mesh) {
+        /* the slave purges its cache before its next frame */
+        arena_mesh = view.mesh;
+        r_arena(&rcpu[0], arena_base, arena_each, schash[0], view.mesh);
+        r_arena(&rcpu[1], arena_base + arena_each, arena_each, schash[1], view.mesh);
     }
+    win_x = (SCREENW - view.vw) >> 1;
+    win_y = (SCREENH - SBAR_H - view.vh) >> 1;
+    r_fb = r_screen + win_y * SCREENW + win_x;
 }
 
 /* input, game ticks, view and PVS for the next frame */
@@ -291,7 +303,11 @@ static uint16_t demo_update(uint32_t now, int ticks, uint16_t pad_pressed)
  * split rebalances to give the slave more of the picture. */
 static void update_input(uint32_t *last_tick, uint16_t *oldpad)
 {
+#ifdef FIXED_TICKS
+    uint32_t now = *last_tick + FIXED_TICKS;    /* test builds: the same game at any speed */
+#else
     uint32_t now = time_now();
+#endif
     int ticks = now - *last_tick, demo_ticks;
     volatile uint16_t *latch = UNCACHED(&pad_latch);
     uint16_t pad = PAD, seen, pressed;
@@ -370,7 +386,8 @@ static void update_input(uint32_t *last_tick, uint16_t *oldpad)
     }
 }
 
-/* the next frame's view, PVS and scene: only once the slave is done */
+/* the next frame's view, PVS, BSP walk and scene, into view_next, vis, cands, scene_next
+   and gun_next: the master does this while the slave still draws */
 static void update_view(int *viewleaf)
 {
     fixed_t eye[3];
@@ -385,47 +402,48 @@ static void update_view(int *viewleaf)
         game_eye(eye);
     if (g_level_done || g_mode == GM_FINALE)
         g_intermission_view(eye, &yaw, &pitch);
-    view.time = frame_now;
+    view_next.time = frame_now;
     r_setup_view(eye, yaw, pitch);
     leaf = r_pointleaf(eye);
-    view.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
+    view_next.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
                       && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;     /* water, slime, lava */
-    update_palette(view.underwater ? lvl.leafs[leaf].contents : 0);
+    update_palette(view_next.underwater ? lvl.leafs[leaf].contents : 0);
     if (leaf != *viewleaf) {
         r_markleaves(leaf);
         *viewleaf = leaf;
     }
     g_build_scene();
+    r_walk();                       /* after the movers' state (g_build_scene) */
     snd_update();
 
     /* the view weapon: the Mega Drive draws it, the 32X skips what it hides */
     if (g_mode == GM_DEMO) {
-        gun.weapon = pd_gun(&gun.frame);
-        if (gun.weapon < 0)
-            gun.frame = -1;
+        gun_next.weapon = pd_gun(&gun_next.frame);
+        if (gun_next.weapon < 0)
+            gun_next.frame = -1;
     } else if (!ps.dead && !cfg.fly && !g_level_done && g_mode == GM_PLAY && ps.invis_finished <= level_time) {
         switch (ps.weapon) {
-        case IT_AXE: gun.weapon = MDW_AXE; break;
-        case IT_SUPER_SHOTGUN: gun.weapon = MDW_SUPER_SHOTGUN; break;
-        case IT_NAILGUN: gun.weapon = MDW_NAILGUN; break;
-        case IT_GRENADE_LAUNCHER: gun.weapon = MDW_GRENADE_LAUNCHER; break;
-        default: gun.weapon = MDW_SHOTGUN;
+        case IT_AXE: gun_next.weapon = MDW_AXE; break;
+        case IT_SUPER_SHOTGUN: gun_next.weapon = MDW_SUPER_SHOTGUN; break;
+        case IT_NAILGUN: gun_next.weapon = MDW_NAILGUN; break;
+        case IT_GRENADE_LAUNCHER: gun_next.weapon = MDW_GRENADE_LAUNCHER; break;
+        default: gun_next.weapon = MDW_SHOTGUN;
         }
-        gun.frame = ps.weaponframe;
+        gun_next.frame = ps.weaponframe;
     } else
-        gun.frame = -1;     /* (invisible: no weapon, as in Quake) */
+        gun_next.frame = -1;     /* (invisible: no weapon, as in Quake) */
     {
         md_cut_t cut;
 #ifdef NO_CUTOUT
         if (0) {
 #else
-        if (md_gun_cut(gun.weapon, cfg.size, gun.frame, &cut)) {
+        if (md_gun_cut(gun_next.weapon, cfg.size, gun_next.frame, &cut)) {
 #endif
-            view.cut_row0 = cut.row0;
-            view.cut_n = cut.nrows;
-            view.cut_x = cut.x;
+            view_next.cut_row0 = cut.row0;
+            view_next.cut_n = cut.nrows;
+            view_next.cut_x = cut.x;
         } else
-            view.cut_n = 0;
+            view_next.cut_n = 0;
     }
 }
 
@@ -438,8 +456,8 @@ GCODE static void load_level(int n)
     cur_level = n;
     r_init();
     r_level_init();
-    arena_mesh = -1;                /* empty surface caches (apply_settings) */
-    view.cachegen++;
+    arena_mesh = -1;                /* empty surface caches (commit_frame) */
+    view_next.cachegen++;
     viewleaf = -1;
     snd_init();
     g_init();
@@ -540,8 +558,11 @@ void pri_main(void)
 #if defined(DEMO_CAMERA) || defined(START_POS)
     cfg.monsters = 0;                   /* camera routes and benchmark views: no monsters */
 #endif
-    view.cachegen = 1;
-    view.mipbias = 0;
+    view_next.cachegen = 1;
+    view_next.mipbias = 0;
+#ifdef TEST_CFG
+    TEST_CFG;                           /* test builds: settings from the start */
+#endif
     apply_settings();
     r_poll_hook = poll_pad;
     last_tick = fps_tick = time_now();
@@ -566,6 +587,7 @@ void pri_main(void)
             update_view(&viewleaf);
             md_flush = 1;
         }
+        commit_frame();
         int32_t mspin = 0, sspin;
         uint16_t fs;
         uint32_t now;
@@ -581,17 +603,31 @@ void pri_main(void)
         if (++tag == 0) tag = 1;
         SLAVE_GO = tag;
         r_render(&rcpu[0], 0, split);
+#ifndef SERIAL_FRAME
         update_input(&last_tick, &oldpad);  /* game ticks while the slave draws */
+#endif
         /* the text, status bar and menu go into the Mega Drive's queue
            while the slave still draws, and the master feeds the 68000
            while it waits: nothing of this keeps the slave waiting */
         overlays_draw(win_x, win_y, fps10, hint_time > 0);
         md_pump();
+        /* the next frame's view, PVS and scene while the slave still draws:
+           the balance hands the slave more rows for it */
+#ifndef SERIAL_FRAME
+        update_view(&viewleaf);
+#endif
         while (SLAVE_DONE != tag) {
             if (!(mspin & 31))
                 md_pump();          /* (now and then: spins are what balances the split) */
             mspin++;
         }
+#ifdef SERIAL_FRAME
+        /* test builds: the game and the next frame only once the slave is
+           done, so that particles (which the slave draws from the game's
+           array) are the same at any speed */
+        update_input(&last_tick, &oldpad);
+        update_view(&viewleaf);
+#endif
         MARS_SYS_COMM8 = tag;
         while (*(volatile int32_t *)UNCACHED(&slave_tag) != tag) ;     /* slave publishes its wait */
         sspin = *(volatile int32_t *)UNCACHED(&slave_spin);
@@ -608,7 +644,9 @@ void pri_main(void)
             if (step == 0 && (d > 64 || d < -64)) step = d > 0 ? 1 : -1;
             if (step > BAL_MAX) step = BAL_MAX;
             if (step < -BAL_MAX) step = -BAL_MAX;
+#ifndef FIXED_SPLIT
             split += step;
+#endif
             {
                 int lim = view.vh >> 3;
                 if (split < lim) split = lim;
@@ -630,13 +668,12 @@ void pri_main(void)
         dbg_fps10 = fps10;
 
         /* request the flip; it happens at the next vertical blank while the
-           game logic and the next frame's geometry run */
+           next frame's geometry runs */
         fs = MARS_VDP_FBCTL & MARS_VDP_FS;
         MARS_VDP_FBCTL = fs ^ 1;
         view.flip_fs = fs ^ 1;
         md_gun(gun.weapon, cfg.size, gun.frame);    /* with the flip */
         md_pump();
-        update_view(&viewleaf);
     }
 }
 

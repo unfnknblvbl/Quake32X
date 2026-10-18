@@ -207,10 +207,30 @@ static inline int project(const fixed_t v[3], mvert_t *o)
     return 1;
 }
 
+#ifndef HOST
+const int16_t *r_anorms;            /* for model_asm.S */
+#endif
+#if !defined(HOST) && !defined(C_MODEL)
+/* model_asm.S: the loop below in assembly (its offsets are checked here) */
+void xform_verts_asm(const mxform_t *m, const uint8_t *fv, mvert_t *mv, int n);
+_Static_assert(__builtin_offsetof(mxform_t, c) == 36 && __builtin_offsetof(mxform_t, lv) == 48
+               && __builtin_offsetof(mxform_t, ambinv) == 60 && __builtin_offsetof(mxform_t, shade) == 64,
+               "mxform_t offsets in model_asm.S");
+_Static_assert(__builtin_offsetof(mvert_t, depth) == 8 && __builtin_offsetof(mvert_t, row) == 10
+               && __builtin_offsetof(mvert_t, near) == 11 && sizeof(mvert_t) == 12,
+               "mvert_t offsets in model_asm.S");
+#define XFORM_ASM 1
+#endif
+
 static NOINLINE void xform_verts(const mxform_t *m, const drawent_t *d, mvert_t *mv)
 {
     const lmodel_t *md = d->mdl;
     const uint8_t *fv = (const uint8_t *)md + md->frames_ofs + d->frame * md->numverts * 4;
+#ifdef XFORM_ASM
+    r_anorms = anorms();
+    xform_verts_asm(m, fv, mv, md->numverts);
+    return;
+#endif
     const int16_t *an = anorms();
     const int32_t a00 = m->a[0][0], a01 = m->a[0][1], a02 = m->a[0][2], c0 = m->c[0];
     const int32_t a10 = m->a[1][0], a11 = m->a[1][1], a12 = m->a[1][2], c1 = m->c[1];

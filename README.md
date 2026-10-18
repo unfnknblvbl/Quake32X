@@ -7,7 +7,7 @@ secrets and sounds. A from-scratch engine runs on the 32X's two SH-2s, and
 the Mega Drive draws the text, the status bar border and the weapon in your
 hands.
 
-Version **0.5.0** (see [CHANGELOG.md](CHANGELOG.md)). Versions 0.x are works
+Version **0.6.0** (see [CHANGELOG.md](CHANGELOG.md)). Versions 0.x are works
 in progress; 1.0.0 will be the first public release.
 
 The technical side (how the renderer works, the cartridge layout,
@@ -89,9 +89,9 @@ rate up.
 ## Speed
 
 On the cycle model of the hardware (see docs/TECHNICAL.md), full screen:
-E1M1 runs at about 15 fps textured and 25 or more flat; E1M3, the heaviest
-level, at 6-7 fps textured over the attract demo and about twice that flat.
-The fastest setup is flat shading at 70-80% screen size.
+E1M1 runs at about 16 fps textured and 28 flat; E1M3, the heaviest level,
+at about 7 fps textured over the attract demo and 16 flat. The fastest
+setup is flat shading at 70-80% screen size.
 
 The cartridge has only been run in emulators (PicoDrive, and the project's
 own cycle model). It is 10 MB and uses Sega's standard bank-switching mapper
