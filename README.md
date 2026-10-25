@@ -162,5 +162,19 @@ See [editor/q32x/README.md](editor/q32x/README.md).
 
 Quake is id Software's. This project contains none of Quake's data: the
 build reads it from your own `pak0.pak`. A cartridge built from the
-shareware `pak0.pak` holds only shareware-episode data.
+shareware `pak0.pak` holds only shareware-episode data. This project is not
+affiliated with or endorsed by id Software.
 
+## Licence
+
+Quake 32X is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 2 of the License, or (at your option)
+any later version (GPL-2.0-or-later). It is distributed in the hope that it
+will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty
+of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+[LICENSE](LICENSE) for the GNU General Public License version 2.
+
+This covers the game, its tools and its converters. Quake's vertex
+normals, which the game and converters include, are id Software's, under
+the GPL v2 or later.
