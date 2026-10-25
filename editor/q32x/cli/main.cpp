@@ -6,6 +6,7 @@
 #include <functional>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -39,13 +40,38 @@ static const char *USAGE =
     "        a project with the cartridge's three levels as they are\n"
     "  flat-palette project.q32x level palette.gpl [key=value...] out.q32x\n"
     "        flat mode in a palette of your own for a level (.pal .gpl .hex .act .lmp .png, or grey);\n"
-    "        keys: vividness variety levels occlusion reach rays up_bias ambient lights lightmaps highlight shade enabled\n"
+    "        keys: vividness variety special_kinds neutral_surfaces levels occlusion reach rays up_bias ambient lights lightmaps highlight shade enabled\n"
+    "  maps [--no-textures] [--palette file] [--sounds full|half|packed|both] [--template project.q32x] pak0.pak\n"
+    "        every map in the pak converted on its own: name, bytes (its sounds included) and title\n"
+    "  make-project [--no-textures] [--palette file] [--sounds full|half|packed|both] --template project.q32x\n"
+    "        pak0.pak out.q32x map...\n"
+    "        a project of these maps with the template's settings (its first level's edits for each)\n"
     "  export project.q32x out_dir\n"
     "        every level, the Mega Drive data and (given the program) the cartridge of a project\n"
     "  auto project.q32x [level]\n"
     "        auto-optimise every level (or one), saving the project\n"
     "  check project.q32x\n"
     "        the budgets and limits of a project's levels\n";
+
+// the build script's choices on a level's edits: no textures (flat shading
+// only, smaller), and flat mode in a palette of greys
+static void cartridge_edits(LevelEdits &e, bool no_textures, const std::string &palette)
+{
+    e.flat_only = no_textures;
+    if (palette.empty() || palette == "none") return;
+    FlatPalOptions &f = e.flatpal;
+    std::string err;
+    if (!builtin_palette(palette, f.rgb) && !load_palette_file(palette, f.rgb, &err))
+        throw std::runtime_error(palette + ": " + err);
+    f.enabled = true;
+    f.source = std::filesystem::path(palette).filename().string();
+    f.vividness = 0;
+    f.variety = 0;
+    f.special_kinds = true;
+    f.neutral_surfaces = true;
+}
+
+static std::string abs_path(const std::string &p) { return std::filesystem::absolute(p).lexically_normal().string(); }
 
 static std::string take(std::vector<std::string> &a, const std::string &flag)
 {
@@ -166,6 +192,7 @@ static int run(std::vector<std::string> a)
             if (k == "vividness") f.vividness = v;
             else if (k == "variety") f.variety = v;
             else if (k == "special_kinds") f.special_kinds = v != 0;
+            else if (k == "neutral_surfaces") f.neutral_surfaces = v != 0;
             else if (k == "levels") f.levels = int(v);
             else if (k == "occlusion") f.occlusion = v;
             else if (k == "reach") f.reach = v;
@@ -183,6 +210,84 @@ static int run(std::vector<std::string> a)
             }
         }
         p.save(a.back());
+        return 0;
+    }
+    if (cmd == "maps" || cmd == "make-project") {
+        bool notex = flag(a, "--no-textures");
+        std::string pal = take(a, "--palette"), tpl = take(a, "--template"), snd = take(a, "--sounds");
+        int sfmt = snd == "half" ? SF_HALF : snd == "packed" ? SF_PACK : snd == "both" ? SF_HALF | SF_PACK : 0;
+        check(snd.empty() || snd == "full" || sfmt, "--sounds: full, half, packed or both");
+        if ((cmd == "maps" && a.size() != 1) || (cmd == "make-project" && (a.size() < 3 || tpl.empty()))) {
+            std::fputs(USAGE, stderr);
+            return 1;
+        }
+        Pak pak = Pak::load(a[0]);
+        Project t = tpl.empty() ? Project::quake_default(a[0]) : Project::load(tpl);
+        LevelEdits base = t.levels.empty() ? LevelEdits{} : t.levels[0].edits;
+        cartridge_edits(base, notex, pal);
+        t.pak_path = abs_path(a[0]);
+        t.program_path = t.program_path.empty() ? "" : abs_path(t.resolve(t.program_path));
+        t.attach_pak(&pak);
+        t.sound_format = sfmt;
+        // the maps' demos: the first of demo1..3 recorded on each
+        std::map<std::string, std::string> demo_of;
+        for (int k = 1; k <= 3; k++) {
+            std::string dn = "demo" + std::to_string(k) + ".dem";
+            if (!pak.has(dn)) continue;
+            try {
+                Dem d = Dem::parse(pak.get(dn));
+                for (auto &f : d.frames)
+                    for (auto &m : f.msgs)
+                        if (m.name == "serverinfo" && m.models.size() > 1 && !demo_of.count(lower(m.models[1])))
+                            demo_of[lower(m.models[1])] = dn;
+            } catch (const std::exception &) {
+            }
+        }
+        if (cmd == "maps") {
+            std::vector<std::string> names;
+            for (auto &n : pak.names())
+                if (starts_with(n, "maps/") && ends_with(n, ".bsp") && !starts_with(n, "maps/b_")) names.push_back(n);
+            std::sort(names.begin(), names.end());
+            t.shared_bank = false;   // (each level with all its sounds: the most it can take)
+            for (auto &n : names) {
+                std::string stem = n.substr(5, n.size() - 9), title;
+                try {
+                    for (auto &e : parse_entities(Bsp::parse(pak.get(n)).entities))
+                        if (e.classname() == "worldspawn") title = e.get("message");
+                    for (auto &c : title)
+                        if (c == '\n' || c == '\t') c = ' ';
+                    LevelProject lp;
+                    lp.name = stem;
+                    lp.bsp = n;
+                    lp.edits = base;
+                    auto dm = demo_of.find(n);
+                    if (dm != demo_of.end()) lp.demo = dm->second;   // (with its attract demo, if it has one)
+                    std::string lg;
+                    Bytes b = t.build_level(lp, true, nullptr, &lg);
+                    std::printf("%s\t%zu\t%s\n", stem.c_str(), b.size(), title.c_str());
+                } catch (const std::exception &e) {
+                    std::printf("%s\t-\t%s\n", stem.c_str(), e.what());
+                }
+                std::fflush(stdout);
+            }
+            return 0;
+        }
+        check(a.size() - 2 <= size_t(ROM_MAX_LEVELS), "at most " + std::to_string(ROM_MAX_LEVELS) + " levels");
+        t.levels.clear();
+        for (size_t i = 2; i < a.size(); i++) {
+            LevelProject lp;
+            lp.name = lower(a[i]);
+            lp.bsp = "maps/" + lp.name + ".bsp";
+            check(pak.has(lp.bsp), "no " + lp.bsp + " in the pak");
+            lp.edits = base;
+            // the attract demo: the first chosen map that has one (the game plays only that)
+            auto it = demo_of.find(lp.bsp);
+            bool have_demo = false;
+            for (auto &l : t.levels) have_demo = have_demo || !l.demo.empty();
+            if (it != demo_of.end() && !have_demo) lp.demo = it->second;
+            t.levels.push_back(lp);
+        }
+        t.save(a[1]);
         return 0;
     }
     if (cmd == "rom") {

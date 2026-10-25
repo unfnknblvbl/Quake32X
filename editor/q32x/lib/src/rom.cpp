@@ -4,8 +4,27 @@
 
 namespace q32x {
 
+static size_t up(size_t v, size_t step) { return (v + step - 1) / step * step; }
+
+size_t linear_size(const std::vector<RomLevel> &levels, const Bytes &bank)
+{
+    size_t at = ROM_PAGE;
+    if (!bank.empty()) at = up(at + bank.size(), ROM_LINEAR_STEP);
+    for (auto &lv : levels) at = up(at + lv.blob.size(), ROM_LINEAR_STEP);
+    return at;
+}
+
+static bool level_has_demo(const Bytes &blob)
+{
+    // the LVL_DEMO lump's count (src/level.h)
+    const int LVL_DEMO = 28;
+    Buf b(true);
+    b.data() = blob;
+    return int32_t(uint32_t(b.get_at(8 + LVL_DEMO * 8 + 4, 4))) > 0;
+}
+
 Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::string &version, RomInfo *info,
-                const Bytes &bank)
+                const Bytes &bank, bool allow_linear)
 {
     if (!version.empty()) {
         std::string memo = ("Version " + version).substr(0, 40);
@@ -23,9 +42,34 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
     };
     std::vector<Dir> dirent;
     if (info) info->levels.clear();
-    // the shared sound bank first: every level maps it in after its own pages
+    const bool linear = allow_linear && linear_size(levels, bank) <= ROM_LINEAR_MAX;
     int bank_page = 0, bank_pages = 0;
-    if (!bank.empty()) {
+    size_t size = 0;
+    if (linear) {
+        // everything where the SH-2s see it: positions and sizes in 64 KB steps
+        const size_t U = ROM_LINEAR_STEP;
+        if (!bank.empty()) {
+            bank_page = int(d.size() / U);
+            bank_pages = int(up(bank.size(), U) / U);
+            d.insert(d.end(), bank.begin(), bank.end());
+            d.resize(up(d.size(), U), 0xFF);
+        }
+        for (auto &lv : levels) {
+            int first = int(d.size() / U);
+            d.insert(d.end(), lv.blob.begin(), lv.blob.end());
+            d.resize(up(d.size(), U), 0xFF);
+            int npages = int(d.size() / U) - first;
+            std::string name = lv.name.substr(0, 11);
+            bool demo = level_has_demo(lv.blob);
+            dirent.push_back({first, npages, demo ? 1 : 0, name});
+            if (info) info->levels.push_back({name, first, npages, lv.blob.size(), demo});
+        }
+        size = ROM_LINEAR_MAX;
+        // (a smaller power of two when it fits: 1, 2 or 4 MB)
+        while (size / 2 >= d.size() && size > (1u << 20)) size /= 2;
+    }
+    // the shared sound bank first: every level maps it in after its own pages
+    if (!linear && !bank.empty()) {
         bank_pages = int((bank.size() + ROM_PAGE - 1) / ROM_PAGE);
         check(bank_pages < ROM_WINDOW_PAGES, "the sound bank is too big for the window");
         bank_page = int(d.size() / ROM_PAGE);
@@ -34,6 +78,7 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
     }
     const int window = ROM_WINDOW_PAGES - bank_pages;
     for (auto &lv : levels) {
+        if (linear) break;
         const Bytes &blob = lv.blob;
         int npages = int((blob.size() + ROM_PAGE - 1) / ROM_PAGE);
         check(npages <= window, lv.name + ": " + std::to_string(blob.size()) + " bytes, more than the " +
@@ -44,16 +89,15 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
         d.resize(size_t(first + npages) * ROM_PAGE, 0xFF);
         std::string name = lv.name.substr(0, 11);
         // flags: 1 = the level has a demo (its LVL_DEMO lump, src/level.h)
-        const int LVL_DEMO = 28;
-        Buf b(true);
-        b.data() = blob;
-        bool has_demo = int32_t(uint32_t(b.get_at(8 + LVL_DEMO * 8 + 4, 4))) > 0;
+        bool has_demo = level_has_demo(blob);
         dirent.push_back({first, npages, has_demo ? 1 : 0, name});
         if (info) info->levels.push_back({name, first, npages, blob.size(), has_demo});
     }
     // whole megabytes, at least 8 MB (some loaders expect a power of two)
-    size_t size = 8u << 20;
-    while (size < d.size()) size += 1u << 20;
+    if (!linear) {
+        size = 8u << 20;
+        while (size < d.size()) size += 1u << 20;
+    }
     d.resize(size, 0xFF);
     const char *tag = "LEVELDIR";
     auto end = d.begin() + std::ptrdiff_t(ROM_PAGE);
@@ -72,6 +116,7 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
     }
     w.put_at(o + 12 + 16 * 8, uint8_t(bank_page), 1);
     w.put_at(o + 12 + 16 * 8 + 1, uint8_t(bank_pages), 1);
+    w.put_at(o + 12 + 16 * 8 + 2, uint16_t(linear ? 1 : 0), 2);   // flags: 1 = no mapper, 64 KB steps
     w.put_at(0x1A4, size - 1, 4);
     unsigned s = 0;
     Bytes &dd = w.data();
@@ -83,6 +128,7 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
         info->checksum = s & 0xFFFF;
         info->bank_page = bank_page;
         info->bank_pages = bank_pages;
+        info->linear = linear;
     }
     return std::move(w.data());
 }

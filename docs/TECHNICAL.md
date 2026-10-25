@@ -28,8 +28,8 @@ the demo.
 A menu setting, **Monsters at once**, caps how many monsters are in the
 world at a time (2 by default); the rest wait in a queue and teleport in,
 with Quake's teleport sound and particle burst, as others die. Bodies (and
-the heads of gibbed monsters) teleport away in the same burst a second
-after they come to rest, so there is less to draw and think about. **Demo
+the heads of gibbed monsters) teleport away in the same burst, silently, a
+second after they come to rest, so there is less to draw and think about. **Demo
 (bot plays)** in the same menu lets a bot play E1M1 from the start.
 
 The Mega Drive does its share: its VDP draws the text, the border around a
@@ -137,6 +137,19 @@ not matter. A level can be up to 3.5 MB.
 PicoDrive turns the mapper on for any 32X ROM over 4 MB. On real hardware it
 needs a cartridge or flash cart that provides the mapper for a 32X game;
 that has not been tried.
+
+**Cartridges of 4 MB or less** (0.7.0; what `build.sh` makes from the maps
+you choose) need no mapper. The SH-2s see the whole cartridge, so the
+converter packs the sound bank and the levels after the program page at
+64 KB steps, sets bit 0 of the level directory's flags word, and writes the
+directory's page numbers and counts in 64 KB steps. The game then reads
+each level where it lies (0x02000000 + 64 KB x its first step) and never
+asks the 68000 to write the mapper registers. The cartridge is padded to 1,
+2 or 4 MB. `build.sh` lists every map in the pak with its size alone (its
+sounds included, so a little more than it takes beside maps that share
+sounds), and keeps asking until the choice fits in the 3.5 MB after the
+program page. Without textures a level loses its textures and light maps
+(`flat_only`); on the shareware maps that saves 10-25%.
 
 Between levels, both CPUs stop between frames: the master stops the sounds,
 maps the next level, resets the renderer (the liquid textures are copied to
@@ -591,6 +604,23 @@ a count, then an (offset, count) pair per lump, in this order:
   4,244 faces take about 1.3 s on two cores. The colour maths uses only
   +, -, *, / and square roots (the cube roots by Newton's method), so every
   machine builds the same bytes.
+* **Smaller sounds.** A sound's format is in the top four bits of its
+  table length (the length stays in 11 kHz samples, as played): 0 as
+  before, 1 half rate (every other sample, after a 1-2-1 low-pass), 2
+  packed in 4 bits, 3 both. Packed blocks are 256 samples in 145 bytes:
+  the value before the first, 16 signed steps, and a nibble per sample
+  naming its step; the encoder fits the steps to the block (k-means over
+  the steps it needs, then again over those its encoding met) and picks
+  each sample's step by where it lands, keeping every value in 0..255, so
+  decoding is a table look-up and an add. The mixer (`src/snd_dec.h`,
+  shared with the converter's tests) decodes a packed channel's samples a
+  byte (two samples) at a time into the channel's own buffer; a half-rate
+  channel is read where it lies, sample (offset + i) / 2 for output i, in
+  its own loops (`mix_direct_half` for up to three, all half-rate;
+  `mix_half` when kinds mix), so half rate costs no decoding pass. A loop's
+  start or a jump decodes from the start of its block. Over E1M3's attract
+  demo: full 12.4 fps, half rate 12.1, packed 12.1, both 11.8 (cycle
+  model). IMA ADPCM, tried first, took the demo from 11.3 to 6.3 fps.
 * **Reduced textures.** A texture's flags byte has the finest mip level
   drawn in bits 0-1 and, in bit 2, 4 bits a texel: 16 palette bytes, then
   two texels a byte (the first in the high nibble), up to 256 texels a mip

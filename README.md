@@ -92,8 +92,8 @@ so you see each change at once. The version number is at the top left.
 | Demo (bot plays) | OFF / PLAYING | A bot plays E1M1 to the exit, then the attract demo returns. Turn it off to take over where it is |
 | Resume | | Back to the game |
 
-Dead monsters teleport away a second after they land, to keep the frame
-rate up.
+Dead monsters teleport away silently, in a burst of particles, a second
+after they land, to keep the frame rate up.
 
 ## Speed
 
@@ -129,6 +129,30 @@ cross compilers the first time (binutils for `sh-elf` and `m68k-elf`, GCC 13
 for the SH-2, about 20-40 minutes, into `~/.local/share/q32x-toolchain`),
 then builds `quake32x.32x`. Later runs skip straight to the cartridge.
 
+Run in a terminal, `build.sh` then asks what to put on the cartridge, so
+that it fits in 4 MB and needs no mapper (some flash carts and consoles may
+have trouble with Sega's mapper):
+
+1. **Keep the textures?** Without them every level is flat shaded and
+   smaller, so more maps fit.
+2. **Flat shading in greys?** Flat mode in `data/palettes/quake32x-greys.gpl`:
+   walls, floors, monsters and items in greys, with lava, water, slime,
+   teleporters, sky, blood and Quake's full-bright colours (fire, flashes,
+   lights) in colour.
+3. **Smaller sounds?** Full quality (as Quake has them), half rate (half
+   the space, duller), packed (57% of the space, a faint hiss) or both (28%).
+   The smaller ones take the mixer a little more work: 2-5% slower when
+   many sounds play.
+4. **Which maps, in order.** It lists every map in your pak with its size
+   and asks until the choice fits. With the shareware pak and full sounds,
+   a textured cartridge holds one map and without textures E1M7 and E1M8
+   fit together; with both smaller sounds and no textures, two of most maps
+   fit (E1M1 and E1M5, for example).
+
+Without a terminal it builds the usual cartridge (E1M1-E1M3 with textures,
+9 MB, which needs the mapper); `MAPS=default ./build.sh` does the same from a
+terminal.
+
 ```
 ./build.sh              # everything that is missing
 ./build.sh toolchain    # only the compilers
@@ -137,6 +161,7 @@ then builds `quake32x.32x`. Later runs skip straight to the cartridge.
 PAK=~/quake/id1/pak0.pak ./build.sh    # take pak0.pak from elsewhere
 TC_PREFIX=/opt/q32x ./build.sh         # put the compilers somewhere else
 SKIP_DEPS=1 ./build.sh                 # don't run pacman
+MAPS="e1m1 e1m5" TEXTURES=0 GREY=1 SOUNDS=both ./build.sh   # choose without being asked
 ```
 
 ### Elsewhere

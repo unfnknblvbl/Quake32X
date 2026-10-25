@@ -62,6 +62,22 @@ built without the editor's changes play exactly as in 0.6.0.
   in while textures are off, with Quake's colours remapped to it for
   monsters, items and particles (the FLATPAL lump). In the cycle model the
   flat E1M3 demo runs at the same speed as with Quake's palette.
+- **4 MB cartridges with no mapper:** a cartridge that fits in 4 MB is built
+  without Sega's mapper (the levels packed at 64 KB steps and read where
+  they lie), and `build.sh` asks which maps to put on it, listing each with
+  its size, whether to keep the textures (without them more maps fit), and
+  whether flat shading is in greys (`data/palettes/quake32x-greys.gpl`,
+  with walls, floors and monsters in greys only and the special colours
+  kept), and whether to make the sounds smaller. New converter commands:
+  `maps` and `make-project`.
+- **Smaller sounds** (game and converter): at half rate (5.5 kHz, half the
+  bytes; the mixer reads each sample twice), packed in 4 bits (each sample
+  a step from the last, from 16 steps fitted to each block of 256; 57% of
+  the bytes, 19-31 dB from the original on Quake's sounds, decoded a byte
+  at a time as they play), or both (28%). Over E1M3's attract demo, which
+  plays many sounds, the frame rate is 2-3% lower with either and 4-5%
+  with both. (4-bit IMA ADPCM was tried first: 44% lower.)
+- **Bodies teleport away silently,** still in their burst of particles.
 - **The cycle model's palette** (`tools/sh2sim.c`): a long write to the
   32X palette now sets both colours, as the 16-bit bus does on the
   hardware (it set one, so the model showed colour shifts and palette

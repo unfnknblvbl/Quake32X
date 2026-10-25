@@ -81,6 +81,18 @@ Sound apply_sound_edit(const Sound &s, const SoundEdit &e);
 // any .wav (8 or 16 bits, mono or stereo, any rate) as 8-bit 11025 Hz
 Sound convert_wav(const Bytes &d);
 
+// smaller sound formats (game 0.7.0; src/snd.c decodes them as they play):
+// SF_HALF every other sample, each played twice (5.5 kHz, half the bytes, duller), SF_PACK 4
+// bits a sample (each the last plus one of 16 steps fitted to its block of
+// 256; 57% of the bytes, a faint hiss), both 28%
+constexpr int SF_HALF = 1, SF_PACK = 2;
+// a sound in a format: its stored bytes; the table's length field (its
+// length in 11 kHz samples, the format in the top four bits)
+Bytes encode_sound(const Sound &s, int format);
+uint32_t sound_length_field(const Sound &s, int format);
+// back to 8-bit 11 kHz, as the game plays it (for checks and previews)
+Bytes decode_sound(const Bytes &stored, uint32_t length_field);
+
 // a sound in the shared bank (offsets from the bank's start)
 struct BankEntry {
     uint32_t ofs = 0;
@@ -102,6 +114,7 @@ struct GameDataOptions {
     std::map<std::string, BankEntry> bank;        // sounds in the shared bank
     std::map<std::string, ModelLod> lods;         // by model name
     std::set<std::string> drop_sounds;            // sounds left out entirely
+    int sound_format = 0;                         // SF_HALF | SF_PACK for every sound
 };
 
 // what a level can use: model names and sound names

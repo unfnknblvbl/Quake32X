@@ -27,13 +27,20 @@
 #define CMD_STOP_ALL 255
 #define CMD_SILENCE  254
 
+#include "snd_dec.h"
+
 typedef struct {
-    const uint8_t *data;            /* 8-bit unsigned, in ROM */
+    const uint8_t *data;            /* 8-bit unsigned, in ROM (format 0: the next sample) */
     int32_t  left;                  /* samples remaining */
     int16_t  lvol, rvol;            /* 0..255 */
-    const uint8_t *loop;            /* where a looping sound starts again */
+    const uint8_t *loop;            /* where a looping sound starts again (formats 1-3: non-NULL) */
     int32_t  looplen;
     int16_t  sound;
+    /* formats 1-3 */
+    uint8_t  fmt;
+    int32_t  pos, loopstart;            /* in 11 kHz samples */
+    sdec_t   sd;                        /* the decoder */
+    uint8_t  dec[BUFSAMPLES / 2];       /* this buffer's samples, decoded */
 } chan_t;
 
 typedef struct {
@@ -259,6 +266,20 @@ GCODE void snd_update(void)
 
 /* ------------------------------------------------------------ slave side */
 
+/* a channel starts a sound: its table entry e; looping: a static channel */
+static void chan_start(chan_t *ch, const int32_t *e, const uint8_t *base, const uint8_t *bank, int looping)
+{
+    int32_t len = SF_LEN(e[1]);
+    ch->data = snd_addr(base, bank, e[0]);
+    ch->left = len;
+    ch->fmt = SF_FMT(e[1]);
+    ch->pos = 0;
+    sdec_start(&ch->sd, ch->data, ch->fmt, len);
+    ch->loopstart = looping && e[2] >= 0 ? e[2] : 0;
+    ch->loop = !looping ? NULL : ch->fmt ? ch->data : ch->data + ch->loopstart;
+    ch->looplen = len - ch->loopstart;
+}
+
 static void take_commands(void)
 {
     volatile uint16_t *head = (volatile uint16_t *)QV(&q_head);
@@ -289,11 +310,7 @@ static void take_commands(void)
                 continue;
             }
             if (ch->sound != s || ch->left <= 0) {
-                const int32_t *e = tab + s * 3;
-                ch->data = snd_addr(base, bank, e[0]);
-                ch->left = e[1];
-                ch->loop = e[2] >= 0 ? ch->data + e[2] : ch->data;
-                ch->looplen = e[2] >= 0 ? e[1] - e[2] : e[1];
+                chan_start(ch, tab + s * 3, base, bank, 1);
                 ch->sound = s;
             }
             ch->lvol = c->lvol;
@@ -305,9 +322,7 @@ static void take_commands(void)
             if (chans[k].left <= 0) { best = k; break; }
             if (chans[k].left < chans[best].left) best = k;
         }
-        chans[best].data = snd_addr(base, bank, tab[s * 3]);
-        chans[best].left = tab[s * 3 + 1];
-        chans[best].loop = NULL;
+        chan_start(&chans[best], tab + s * 3, base, bank, 0);
         chans[best].lvol = c->lvol;
         chans[best].rvol = c->rvol;
         chans[best].sound = s;
@@ -321,6 +336,7 @@ static void take_commands(void)
 static int silent_bufs;
 
 #define HALF (BUFSAMPLES / 2)
+#define HALF_SAMPLES HALF
 
 /* v >> 7 (arithmetic): GCC calls a library routine for it on the SH-2,
    the multiplier's high word does it in two instructions */
@@ -429,10 +445,114 @@ static void mix_many(uint32_t *out, int a, int b, const uint8_t *const *q, const
     }
 }
 
+/* up to three half-rate channels straight into the output, as mix_direct:
+   channel k's sample for output i is p_k[(o_k + i) / 2] */
+static void mix_direct_half(uint32_t *out, int a, int b, const uint8_t *const *q, const int *lv, const int *rv,
+                            const int *off, int m, int mid, int top)
+{
+    int i;
+    out += 2 * a;
+    if (m == 1) {
+        const uint8_t *p0 = q[0];
+        int l0 = lv[0], r0 = rv[0], o0 = off[0];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[(o0 + i) >> 1] - 128;
+            uint32_t w = pack(v0 * l0, v0 * r0, mid, top);
+            out[0] = w;
+            out[1] = w;
+            out += 2;
+        }
+    } else if (m == 2) {
+        const uint8_t *p0 = q[0], *p1 = q[1];
+        int l0 = lv[0], r0 = rv[0], l1 = lv[1], r1 = rv[1], o0 = off[0], o1 = off[1];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[(o0 + i) >> 1] - 128, v1 = (int)p1[(o1 + i) >> 1] - 128;
+            uint32_t w = pack(v0 * l0 + v1 * l1, v0 * r0 + v1 * r1, mid, top);
+            out[0] = w;
+            out[1] = w;
+            out += 2;
+        }
+    } else {
+        const uint8_t *p0 = q[0], *p1 = q[1], *p2 = q[2];
+        int l0 = lv[0], r0 = rv[0], l1 = lv[1], r1 = rv[1], l2 = lv[2], r2 = rv[2];
+        int o0 = off[0], o1 = off[1], o2 = off[2];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[(o0 + i) >> 1] - 128, v1 = (int)p1[(o1 + i) >> 1] - 128;
+            int v2 = (int)p2[(o2 + i) >> 1] - 128;
+            uint32_t w = pack(v0 * l0 + v1 * l1 + v2 * l2, v0 * r0 + v1 * r1 + v2 * r2, mid, top);
+            out[0] = w;
+            out[1] = w;
+            out += 2;
+        }
+    }
+}
+
+/* a stretch with half-rate channels: those summed first into the output
+   words (each stored sample read for two output samples: the sample index
+   is (its offset + i) / 2), then the others as mix_many does */
+static const uint8_t silence[HALF_SAMPLES] = {0};
+static void mix_half(uint32_t *out, int a, int b, const uint8_t *const *q, const int *lv, const int *rv,
+                     const int *off, const uint8_t *hf, int m, int mid, int top)
+{
+#ifdef HOST
+    int32_t *acc = (int32_t *)out;
+#else
+    int32_t *acc = (int32_t *)((uint32_t)out & ~0x20000000);
+#endif
+    const uint8_t *fq[NCHAN + NSTATIC];
+    int fl[NCHAN + NSTATIC], fr[NCHAN + NSTATIC], nf = 0, i, k;
+    for (i = a; i < b; i++)
+        acc[2 * i] = acc[2 * i + 1] = 0;
+    for (k = 0; k < m; k++) {
+        if (!hf[k]) {
+            fq[nf] = q[k];
+            fl[nf] = lv[k];
+            fr[nf] = rv[k];
+            nf++;
+            continue;
+        }
+        {
+            const uint8_t *p0 = q[k];
+            int l0 = lv[k], r0 = rv[k], o = off[k];
+            for (i = a; i < b; i++) {
+                int v0 = (int)p0[(o + i) >> 1] - 128;
+                acc[2 * i] += v0 * l0;
+                acc[2 * i + 1] += v0 * r0;
+            }
+        }
+    }
+    k = 0;
+    while (nf - k > 3) {
+        const uint8_t *p0 = fq[k], *p1 = fq[k + 1];
+        int l0 = fl[k], r0 = fr[k], l1 = fl[k + 1], r1 = fr[k + 1];
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128, v1 = (int)p1[i] - 128;
+            acc[2 * i] += v0 * l0 + v1 * l1;
+            acc[2 * i + 1] += v0 * r0 + v1 * r1;
+        }
+        k += 2;
+    }
+    {
+        /* the last up to three, and the sums out (silence for those not there) */
+        const uint8_t *p0 = nf - k > 0 ? fq[k] : silence, *p1 = nf - k > 1 ? fq[k + 1] : silence;
+        const uint8_t *p2 = nf - k > 2 ? fq[k + 2] : silence;
+        int l0 = nf - k > 0 ? fl[k] : 0, r0 = nf - k > 0 ? fr[k] : 0;
+        int l1 = nf - k > 1 ? fl[k + 1] : 0, r1 = nf - k > 1 ? fr[k + 1] : 0;
+        int l2 = nf - k > 2 ? fl[k + 2] : 0, r2 = nf - k > 2 ? fr[k + 2] : 0;
+        for (i = a; i < b; i++) {
+            int v0 = (int)p0[i] - 128, v1 = (int)p1[i] - 128, v2 = (int)p2[i] - 128;
+            uint32_t w = pack(acc[2 * i] + v0 * l0 + v1 * l1 + v2 * l2,
+                              acc[2 * i + 1] + v0 * r0 + v1 * r1 + v2 * r2, mid, top);
+            out[2 * i] = w;
+            out[2 * i + 1] = w;
+        }
+    }
+}
+
 /* the buffer cut where channels start or stop, each stretch mixed with
    only the channels playing in it */
 static void mix_segments(uint32_t *out, const uint8_t *const *p, const int *lv, const int *rv,
-                         const int *lo, const int *hi, int na, int mid)
+                         const int *lo, const int *hi, const int *off, const uint8_t *hf, int na, int mid)
 {
     int cuts[2 * (NCHAN + NSTATIC) + 2], nc = 0, i, j, top = pwm_cycle - 1;
     cuts[nc++] = 0;
@@ -448,9 +568,10 @@ static void mix_segments(uint32_t *out, const uint8_t *const *p, const int *lv, 
             cuts[j - 1] = t;
         }
     for (i = 0; i + 1 < nc; i++) {
-        int a = cuts[i], b = cuts[i + 1], m = 0, k;
+        int a = cuts[i], b = cuts[i + 1], m = 0, k, nh = 0;
         const uint8_t *q[NCHAN + NSTATIC];
-        int ql[NCHAN + NSTATIC], qr[NCHAN + NSTATIC];
+        int ql[NCHAN + NSTATIC], qr[NCHAN + NSTATIC], qo[NCHAN + NSTATIC];
+        uint8_t qh[NCHAN + NSTATIC];
         if (a >= b)
             continue;
         for (k = 0; k < na; k++)
@@ -458,9 +579,16 @@ static void mix_segments(uint32_t *out, const uint8_t *const *p, const int *lv, 
                 q[m] = p[k];
                 ql[m] = lv[k];
                 qr[m] = rv[k];
+                qo[m] = off[k];
+                qh[m] = hf[k];
+                nh += hf[k];
                 m++;
             }
-        if (!m) {
+        if (nh == m && m <= 3)
+            mix_direct_half(out, a, b, q, ql, qr, qo, m, mid, top);
+        else if (nh)
+            mix_half(out, a, b, q, ql, qr, qo, qh, m, mid, top);
+        else if (!m) {
             uint32_t w = ((uint32_t)mid << 16) | mid, *o = out + 2 * a;
             for (k = a; k < b; k++, o += 2)
                 o[0] = o[1] = w;
@@ -474,7 +602,8 @@ static void mix_segments(uint32_t *out, const uint8_t *const *p, const int *lv, 
 static __attribute__((noinline)) void mix(uint32_t *out)
 {
     const uint8_t *p[NCHAN + NSTATIC];
-    int lv[NCHAN + NSTATIC], rv[NCHAN + NSTATIC], lo[NCHAN + NSTATIC], hi[NCHAN + NSTATIC];
+    int lv[NCHAN + NSTATIC], rv[NCHAN + NSTATIC], lo[NCHAN + NSTATIC], hi[NCHAN + NSTATIC], off[NCHAN + NSTATIC];
+    uint8_t hf[NCHAN + NSTATIC];
     int i, k, na = 0, mid = pwm_cycle >> 1;
     take_commands();
     for (k = 0; k < NCHAN; k++) {
@@ -486,11 +615,60 @@ static __attribute__((noinline)) void mix(uint32_t *out)
             continue;
         }
         n = ch->left < HALF ? ch->left : HALF;
+        if (ch->fmt) {
+            /* formats 1-3 (snd_dec.h): a piece from pos, and the loop's start
+               after it if it wraps in this buffer */
+            int part, at = 0, used = 0;
+            for (part = 0; part < 2; part++) {
+                int len = part ? HALF - n : n;
+                if (part) {
+                    if (!(ch->left <= 0 && ch->loop && ch->looplen > 0))
+                        break;
+                    if (len > ch->looplen) len = ch->looplen;
+                    ch->pos = ch->loopstart;
+                    ch->left = ch->looplen;
+                    if (len <= 0)
+                        break;
+                }
+                lv[na] = ch->lvol;
+                rv[na] = ch->rvol;
+                lo[na] = at;
+                hi[na] = at + len;
+                if (ch->fmt == SF_PACK) {
+                    /* 4 bits: decoded, then mixed as it is */
+                    sdec_t *d = &ch->sd;
+                    pk_decode(d, ch->pos, len, ch->dec + used);
+                    p[na] = ch->dec + used - at;        /* indexed from the buffer start */
+                    off[na] = 0;
+                    hf[na] = 0;
+                    used += len;
+                } else {
+                    /* half rate: read at half speed, sample (off + i) / 2 */
+                    const uint8_t *src = ch->data;
+                    if (ch->fmt & SF_PACK) {
+                        int32_t k0 = ch->pos >> 1, k1 = (ch->pos + len - 1) >> 1;
+                        pk_decode(&ch->sd, k0, k1 - k0 + 1, ch->dec + used);
+                        src = ch->dec + used - k0;
+                        used += k1 - k0 + 1;
+                    }
+                    p[na] = src;
+                    off[na] = ch->pos - at;
+                    hf[na] = 1;
+                }
+                na++;
+                ch->pos += len;
+                ch->left -= len;
+                at += len;
+            }
+            continue;
+        }
         p[na] = ch->data;
         lv[na] = ch->lvol;
         rv[na] = ch->rvol;
         lo[na] = 0;
         hi[na] = n;
+        off[na] = 0;
+        hf[na] = 0;
         na++;
         ch->data += n;
         ch->left -= n;
@@ -506,6 +684,8 @@ static __attribute__((noinline)) void mix(uint32_t *out)
                 rv[na] = ch->rvol;
                 lo[na] = n;
                 hi[na] = n + rest;
+                off[na] = 0;
+                hf[na] = 0;
                 na++;
                 ch->data += rest;
                 ch->left -= rest;
@@ -523,7 +703,7 @@ static __attribute__((noinline)) void mix(uint32_t *out)
         return;
     }
     silent_bufs = 0;
-    mix_segments(out, p, lv, rv, lo, hi, na, mid);
+    mix_segments(out, p, lv, rv, lo, hi, off, hf, na, mid);
 }
 
 #ifndef HOST

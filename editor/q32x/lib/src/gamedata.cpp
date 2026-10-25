@@ -983,10 +983,11 @@ std::map<std::string, Lump> add_game_data(Buf &blob, const Pak &pak, const Palet
         Sound snd = it != opt.sounds.end() ? it->second : load_wav(pak.get("sound/" + s + ".wav"));
         auto eit = opt.sound_edits.find(s);
         if (eit != opt.sound_edits.end() && !eit->second.plain()) snd = apply_sound_edit(snd, eit->second);
-        size_t o = blob.add(snd.data);
-        ssize += snd.data.size();
+        Bytes stored = encode_sound(snd, opt.sound_format);
+        size_t o = blob.add(stored);
+        ssize += stored.size();
         ent.u32(int64_t(o));
-        ent.u32(int64_t(snd.data.size()));
+        ent.u32(int64_t(sound_length_field(snd, opt.sound_format)));
         ent.i32(snd.loop);
     }
     std::copy(ent.data().begin(), ent.data().end(), blob.data().begin() + std::ptrdiff_t(base));

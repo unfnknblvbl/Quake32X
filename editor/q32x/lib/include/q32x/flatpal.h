@@ -27,6 +27,10 @@ struct FlatPalOptions {
     // blue-green, slime green-yellow, lava red, teleporters purple, sky
     // blue-purple, each the nearest of the palette to that colour
     bool special_kinds = true;
+    // ordinary surfaces, and the duller colours of models, from the
+    // palette's greys only (by lightness); the colourful ones (blood, fire,
+    // the full brights) and liquids and skies keep their colours
+    bool neutral_surfaces = false;
     // shading: by occlusion and the light entities (false: Quake's light maps)
     bool shade = true;
     double occlusion = 0.8;           // how much enclosed places darken (0..1)
@@ -58,6 +62,9 @@ class ColourMatch {
 public:
     explicit ColourMatch(const std::array<uint8_t, 768> &rgb);
     int nearest(const Rgb &c) const;
+    // the nearest of the palette's greys by lightness (-1: it has none)
+    int nearest_grey(const Rgb &c) const;
+    static double chroma(const Rgb &c);
     Rgb rgb(int i) const { return {double(rgb_[size_t(3 * i)]), double(rgb_[size_t(3 * i + 1)]), double(rgb_[size_t(3 * i + 2)])}; }
 
 private:

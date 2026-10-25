@@ -174,6 +174,7 @@ static Json edits_json(const LevelEdits &e)
         o.set("vividness", f.vividness);
         o.set("variety", f.variety);
         o.set("special_kinds", f.special_kinds);
+        o.set("neutral_surfaces", f.neutral_surfaces);
         o.set("levels", f.levels);
         o.set("shade", f.shade);
         o.set("occlusion", f.occlusion);
@@ -258,6 +259,7 @@ static LevelEdits edits_from(const Json &j)
         f.vividness = fp["vividness"].as_number(d.vividness);
         f.variety = fp["variety"].as_number(d.variety);
         f.special_kinds = fp["special_kinds"].as_bool(d.special_kinds);
+        f.neutral_surfaces = fp["neutral_surfaces"].as_bool(d.neutral_surfaces);
         f.levels = fp["levels"].as_int(d.levels);
         f.shade = fp["shade"].as_bool(d.shade);
         f.occlusion = fp["occlusion"].as_number(d.occlusion);
@@ -328,6 +330,7 @@ Json Project::to_json() const
         j.set("reduced_textures", o);
     }
     j.set("shared_bank", shared_bank);
+    if (sound_format) j.set("sound_format", sound_format);
     if (!sounds.empty()) {
         Json o = Json::object();
         for (auto &kv : sounds) {
@@ -430,6 +433,7 @@ Project Project::from_json(const Json &j, const std::string &path)
         p.reduced[kv.first] = t;
     }
     p.shared_bank = j["shared_bank"].as_bool();
+    p.sound_format = std::clamp(j["sound_format"].as_int(0), 0, 3);
     for (auto &kv : j["sounds"].members()) {
         SoundProject s;
         s.edit.gain = kv.second["gain"].as_number(1.0);
@@ -644,9 +648,10 @@ SoundBank Project::build_bank(std::string *log) const
         while (bank.data.size() % 4) bank.data.push_back(0);
         BankEntry e;
         e.ofs = uint32_t(bank.data.size());
-        e.len = uint32_t(snd.data.size());
+        e.len = sound_length_field(snd, sound_format);
         e.loop = snd.loop;
-        bank.data.insert(bank.data.end(), snd.data.begin(), snd.data.end());
+        Bytes stored = encode_sound(snd, sound_format);
+        bank.data.insert(bank.data.end(), stored.begin(), stored.end());
         bank.entries[s] = e;
     }
     if (log)
@@ -664,6 +669,7 @@ GameDataOptions Project::game_options(const SoundBank *bank) const
         if (!kv.second.file.empty()) g.sounds[kv.first] = convert_wav(read_file(resolve(kv.second.file)));
     }
     if (bank) g.bank = bank->entries;
+    g.sound_format = sound_format;
     if (!models.empty()) {
         Palette pal = palette();
         for (auto &kv : models) {

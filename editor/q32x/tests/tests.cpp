@@ -1,15 +1,24 @@
 // libq32x self-tests (no game data needed)
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 #include "q32x/bytes.h"
 #include "q32x/flatpal.h"
+#include "q32x/gamedata.h"
 #include "q32x/image.h"
 #include "q32x/json.h"
 #include "q32x/mdgfx.h"
 #include "q32x/project.h"
+#include "q32x/rom.h"
 
 using namespace q32x;
+
+// the game's own decoder (src/snd.c plays the smaller sound formats with it)
+#if __has_include("../../../src/snd_dec.h")
+#define HAVE_GAME_DECODER 1
+#include "../../../src/snd_dec.h"
+#endif
 
 static int failures = 0;
 #define CHECK(c)                                                         \
@@ -93,6 +102,52 @@ int main()
         auto sp = spread_hues(c3, {1, 1, 1, 1}, 1.0);
         double far = std::fabs(sp[0][0] - sp[2][0]) + std::fabs(sp[0][1] - sp[2][1]) + std::fabs(sp[0][2] - sp[2][2]);
         CHECK(sp[3] == c3[3] && far > 150 && spread_hues(c3, {1, 1, 1, 1}, 0) == c3);
+    }
+    {   // cartridges: 4 MB or less without the mapper, bigger with it
+        Bytes prog(0x400, 0);
+        const char *tag = "LEVELDIR";
+        std::copy(tag, tag + 8, prog.begin() + 0x300);
+        auto lv = [](size_t n) { return RomLevel{"m", Bytes(n, 0x11)}; };
+        RomInfo i1, i2;
+        Bytes small = build_rom(prog, {lv(1000000), lv(1500000)}, "", &i1, Bytes(300000, 0x22));
+        CHECK(i1.linear && small.size() == (4u << 20) && i1.levels[0].first == 13 && i1.bank_page == 8 && i1.bank_pages == 5);
+        CHECK(small[0x300 + 12 + 128 + 3] == 1 && small[size_t(i1.levels[1].first) * 65536] == 0x11);
+        Bytes big = build_rom(prog, {lv(2000000), lv(2000000)}, "", &i2, Bytes(300000, 0x22));
+        CHECK(!i2.linear && big.size() >= (8u << 20) && big[0x300 + 12 + 128 + 3] == 0);
+    }
+    {   // smaller sounds: sizes, and what plays back stays close to the original
+        Sound snd;
+        for (int i = 0; i < 3001; i++)
+            snd.data.push_back(uint8_t(128 + std::lround(90 * std::sin(i * 0.05) + 20 * std::sin(i * 0.31))));
+        for (int f = 0; f < 4; f++) {
+            Bytes st = encode_sound(snd, f);
+            uint32_t field = sound_length_field(snd, f);
+            Bytes back = decode_sound(st, field);
+            size_t want = f == 0 ? 3001 : f == SF_HALF ? 1501 : f == SF_PACK ? 12 * 145 : 6 * 145;
+            double err = 0;
+            for (size_t i = 0; i < back.size(); i++) err += std::abs(int(back[i]) - int(snd.data[i]));
+            err /= double(back.size());
+            CHECK(st.size() == want && back.size() == 3001 && (field >> 28) == uint32_t(f));
+            CHECK(err < (f == 0 ? 0.001 : 4.0));
+#ifdef HAVE_GAME_DECODER
+            // the game's decoder gives the same samples, in the runs the mixer asks for
+            // (128 at a time, a loop back to sample 1000, and a jump forward)
+            sdec_t d;
+            sdec_start(&d, st.data(), f, 3001);
+            Bytes game;
+            uint8_t buf[128];
+            for (int32_t pos = 0; pos < 3001; pos += 128) {
+                int n = int(std::min<int32_t>(128, 3001 - pos));
+                sdec_run(&d, pos, n, buf);
+                game.insert(game.end(), buf, buf + n);
+            }
+            CHECK(game == back);
+            sdec_run(&d, 1000, 100, buf);
+            CHECK(std::equal(buf, buf + 100, back.begin() + 1000));
+            sdec_run(&d, 2500, 77, buf);
+            CHECK(std::equal(buf, buf + 77, back.begin() + 2500));
+#endif
+        }
     }
     return failures ? 1 : 0;
 }

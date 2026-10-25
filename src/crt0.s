@@ -451,5 +451,5 @@ _level_dir:
         .long   0                       /* count */
         .space  16 * 8                  /* first page, pages, flags, name[12] */
         .byte   0, 0                    /* the shared sound bank: first page, pages (0: none) */
-        .short  0
+        .short  0                       /* flags: 1 = no mapper (4 MB), pages in 64 KB steps */
         .balign 16

@@ -94,6 +94,7 @@ public:
     std::map<std::string, ReducedTexture> reduced;   // per texture name, by hand
     std::map<std::string, SoundProject> sounds;
     bool shared_bank = false;
+    int sound_format = 0;      // every sound: SF_HALF (5.5 kHz) | SF_PACK (4-bit), gamedata.h
     std::map<std::string, ModelProject> models;
     MdGfxOptions md;
 

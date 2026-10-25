@@ -267,6 +267,29 @@ static Rgb from_hsv(Hsv x)
     return {(rr + m) * 255, (gg + m) * 255, (bb + m) * 255};
 }
 
+int ColourMatch::nearest_grey(const Rgb &c) const
+{
+    auto L = to_lab({std::clamp(c[0], 0.0, 255.0), std::clamp(c[1], 0.0, 255.0), std::clamp(c[2], 0.0, 255.0)});
+    double best = 1e300;
+    int bi = -1;
+    for (int i = 0; i < 256; i++) {
+        const auto &p = lab_[size_t(i)];
+        if (p[1] * p[1] + p[2] * p[2] > 0.0004) continue;   // chroma over 0.02: not a grey
+        double d = (L[0] - p[0]) * (L[0] - p[0]);
+        if (d < best) {
+            best = d;
+            bi = i;
+        }
+    }
+    return bi;
+}
+
+double ColourMatch::chroma(const Rgb &c)
+{
+    auto L = to_lab({std::clamp(c[0], 0.0, 255.0), std::clamp(c[1], 0.0, 255.0), std::clamp(c[2], 0.0, 255.0)});
+    return std::sqrt(L[1] * L[1] + L[2] * L[2]);
+}
+
 Rgb vivid(const Rgb &c, double a)
 {
     a = std::clamp(a, 0.0, 1.0);
@@ -369,7 +392,11 @@ std::vector<int> flatpal_texture_colours(const Bsp &m, const std::vector<Rgb> &t
                                                            : Rgb{40, 152, 144};
             if (k[0] >= 0) viv[i] = k;
         }
-    for (auto &c : viv) out.push_back(cmatch.nearest(c));
+    for (size_t i = 0; i < viv.size(); i++) {
+        bool special = textures[i] && o.special_kinds && (starts_with(textures[i]->name, "sky") || starts_with(textures[i]->name, "*"));
+        int g = o.neutral_surfaces && !special ? cmatch.nearest_grey(viv[i]) : -1;
+        out.push_back(g >= 0 ? g : cmatch.nearest(viv[i]));
+    }
     if (chosen) *chosen = viv;
     return out;
 }
@@ -402,10 +429,13 @@ FlatPalTables build_flatpal_tables(const FlatPalOptions &o, const Palette &quake
     t.ucm.assign(64 * 256, 0);
     for (int q = 0; q < 256; q++) {
         Rgb c = vivid({double(quake.rgb[3 * q]), double(quake.rgb[3 * q + 1]), double(quake.rgb[3 * q + 2])}, o.vividness);
-        t.remap[size_t(q)] = uint8_t(cm.nearest(c));
+        // neutral: Quake's duller colours (its browns, skin and stone) as greys
+        bool grey = o.neutral_surfaces && q < 224 && ColourMatch::chroma(c) < 0.12 && cm.nearest_grey(c) >= 0;
+        auto pick = [&](const Rgb &x) { return grey ? cm.nearest_grey(x) : cm.nearest(x); };
+        t.remap[size_t(q)] = uint8_t(pick(c));
         for (int row = 0; row < 64; row++)
             // (Quake's last 32 colours are full bright: the same at every light level)
-            t.cmap[size_t(row * 256 + q)] = uint8_t(q >= 224 ? t.remap[size_t(q)] : cm.nearest(shade_rgb(c, row)));
+            t.cmap[size_t(row * 256 + q)] = uint8_t(q >= 224 ? t.remap[size_t(q)] : pick(shade_rgb(c, row)));
     }
     for (int u = 0; u < 256; u++)
         for (int row = 0; row < 64; row++)

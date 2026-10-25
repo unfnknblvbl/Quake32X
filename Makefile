@@ -127,14 +127,18 @@ build/q32x.elf: $(OBJS) src/mars.ld
 # (door areas, simpler collision, merged faces, vertex order, the shared
 # sound bank, packed weapon tiles with flat-shaded versions). PLAIN=1 builds
 # the levels as converted without them.
+# PROJECT=file.q32x exports another project instead (build.sh makes one
+# from the maps you choose).
+PROJECT ?= data/quake32x.q32x
 ifeq ($(PLAIN),1)
 quake32x.32x: build/q32x.elf $(CONVERT) $(LVLS) VERSION
 	$(OBJCOPY) -O binary $< build/q32x.bin
 	$(CONVERT) rom --version $(VERSION) build/q32x.bin $@ $(LVLS)
 else
-quake32x.32x: build/q32x.elf $(CONVERT) data/quake32x.q32x data/pak0.pak VERSION
+quake32x.32x: build/q32x.elf $(CONVERT) $(PROJECT) data/pak0.pak VERSION
 	$(OBJCOPY) -O binary $< build/q32x.bin
-	$(CONVERT) export data/quake32x.q32x build/export
+	rm -f build/export/*.lvl
+	$(CONVERT) export $(PROJECT) build/export
 	cp build/export/quake32x.32x $@
 endif
 

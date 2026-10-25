@@ -22,8 +22,13 @@ typedef struct {
     uint32_t count;
     ldirent_t lv[8];
     uint8_t  bank_page, bank_npages;    /* the shared sound bank (0 pages: none) */
-    uint16_t pad;
+    uint16_t flags;                     /* LD_ */
 } leveldir_t;
+
+/* a cartridge of 4 MB or less needs no mapper: the SH-2s see all of it at
+   0x02000000, and the directory's pages are 64 KB steps of it */
+#define LD_LINEAR 1
+#define LINEAR_STEP 0x10000
 
 #ifndef HOST
 extern const leveldir_t level_dir;
@@ -59,6 +64,8 @@ GCODE int lvl_demo(void)
  * slave's does at the start of its next frame) */
 GCODE const void *lvl_map(int n)
 {
+    if (level_dir.flags & LD_LINEAR)
+        return (const void *)(0x02000000 + level_dir.lv[n].page * LINEAR_STEP);
     if (level_dir.bank_npages)
         md_bank_set(level_dir.bank_page, level_dir.bank_npages);
     md_bank(level_dir.lv[n].page);
@@ -71,6 +78,8 @@ GCODE const uint8_t *lvl_bank(void)
 {
     if (!level_dir.bank_npages)
         return NULL;
+    if (level_dir.flags & LD_LINEAR)
+        return (const uint8_t *)(0x02000000 + level_dir.bank_page * LINEAR_STEP);
     return (const uint8_t *)LEVEL_WINDOW + (7 - level_dir.bank_npages) * 0x80000;
 }
 #endif
