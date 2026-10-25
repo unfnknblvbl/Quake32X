@@ -175,6 +175,19 @@ static void build_surface(rcpu_t *rc, surfcache_t *sc, const lface_t *f, int mip
     int smax = (f->ext[0] >> 4) + 1;
     int u, v;
     uint8_t *out = sc->data;
+    uint8_t unpacked[256];
+
+    if ((tx->flags & 4) && mip == (tx->flags & 3) && tw * th <= 256) {
+        /* 16 colours at 4 bits a texel (the editor's reduced textures):
+           a 16-entry palette, then two texels a byte, the first high */
+        const uint8_t *pal = tex, *p = tex + 16;
+        int i, n = tw * th;
+        for (i = 0; i < n; i += 2, p++) {
+            unpacked[i] = pal[*p >> 4];
+            unpacked[i + 1] = pal[*p & 15];
+        }
+        tex = unpacked;
+    }
 
     rc->surfbuilds++;
     rc->texels += sw * sh;

@@ -338,10 +338,38 @@ static int light_rec(int num, const fixed_t start[3], const fixed_t end[3])
     return light_rec(n->child[!side], mid, end);
 }
 
+/* the editor's light grid: the light at a point, between the grid's points */
+static int grid_light(const lgrid_t *g, const fixed_t p[3])
+{
+    int i[3], f[3], k, x, y, z;
+    int32_t acc = 0;
+    for (k = 0; k < 3; k++) {
+        int32_t c = hw_div((p[k] >> 8) - (g->org[k] << 8), g->step);   /* 8.8 grid steps */
+        if (c < 0) c = 0;
+        i[k] = c >> 8;
+        f[k] = c & 255;
+        if (i[k] >= g->dims[k] - 1) {
+            i[k] = g->dims[k] - 1;
+            f[k] = 0;
+        }
+    }
+    for (z = 0; z < 2; z++)
+        for (y = 0; y < 2; y++)
+            for (x = 0; x < 2; x++) {
+                int w = (x ? f[0] : 256 - f[0]) * (y ? f[1] : 256 - f[1]) >> 8;
+                int ix = i[0] + (x && f[0]), iy = i[1] + (y && f[1]), iz = i[2] + (z && f[2]);
+                w = w * (z ? f[2] : 256 - f[2]) >> 8;
+                acc += w * g->v[(iz * g->dims[1] + iy) * g->dims[0] + ix];
+            }
+    return acc >> 8;
+}
+
 int g_light_point(const fixed_t p[3])
 {
     fixed_t end[3];
     int r;
+    if (lvl.grid)
+        return grid_light(lvl.grid, p);
     end[0] = p[0];
     end[1] = p[1];
     end[2] = p[2] - FX(2048);

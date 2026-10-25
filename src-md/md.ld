@@ -1,6 +1,7 @@
 /* 68000 program: ROM code at 0x880800 (ROM offset 0x800), followed by the
    image of the loop and vblank handler that it copies to work RAM. The
-   Mega Drive data (tools/mkmd.py) starts at ROM offset 0x4000. */
+   68000 code must end before ROM offset 0x4000 (its own limit; the Mega
+   Drive data is at ROM offset 0x30000, src/mars.ld). */
 SECTIONS
 {
     .text 0x880800 : { *(.text) }

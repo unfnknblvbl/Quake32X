@@ -576,7 +576,7 @@ void overlays_draw(int win_x, int win_y, int fps10, int hint)
     if (menu_active)
         menu_draw();
     if (cfg.showfps)
-        hud_draw(menu_active ? MD_COLS - 9 : vx0 + 1, menu_active ? 0 : vy0, fps10);
+        hud_draw(menu_active ? MD_COLS - 9 : 0, 0, fps10);   /* the screen's top left: in the border when there is one */
     if (hint && !menu_active)
         hint_draw(sbar - 3);
     md_end_text();

@@ -534,6 +534,113 @@ Other tricks:
   candidate list) and took it back from the master's stack, which is now
   4 KB (it uses up to about 2.4 KB).
 
+## Level extensions (0.7.0)
+
+The editor's changes to a level that the engine has to know about go in an
+extension directory. The level header's i32 at offset 296 points to it (0:
+none, as every level before 0.7.0), and the i32 at 300 holds flags
+(`LF_FLAT_ONLY` = 1: no textures or light maps). The directory is `'Q32X'`,
+a count, then an (offset, count) pair per lump, in this order:
+
+| Lump | Entries | What |
+|---|---|---|
+| FLATREF | u16 first, u8 count, u8 pad (per face) | the face's flat-mode pieces (light to polygons) |
+| FLATMARK | u16 | the pieces, as the leaves' face lists mark faces |
+| LIGHTGRID | i16 origin[3], u16 step, u16 dims[3], u16 pad, then u8 light values | model lighting, trilinear |
+| LEAFAREA | u8 per leaf | 0 always drawn, 1-127 an area, 128+k the doorway of door k |
+| DOORS | u8 mover, u8 area count, u8 areas[4], u16 pad | doors that divide areas |
+| LEAFFAR | u16 per leaf | draw distance in world units (0: the menu's) |
+| MVMODELS | u32 per mover | movers drawn as flat-coloured models |
+| MDLLOD | u32 offset, u16 distance, u16 pad (per model id) | a model's distance version |
+| FLATPAL | u16 cram[256], u8 remap[256], u8 cmap[64 x 256] (one) | flat mode's own palette |
+
+* **Door areas.** The converter makes portals from the world BSP, finds the
+  leaves each door fills (at least half inside it), joins linked doors, and
+  floods the leaves into areas with every door closed. A door divides 2-4
+  areas. While the view is in an area, the engine floods through the doors
+  that are open (a mover away from its start) and leaves out what it cannot
+  reach; leaves are marked again when a door opens or closes.
+* **Light to polygons.** Each face's light map is cut into 2-6 light levels
+  (one-dimensional k-means over the level), small regions are merged into
+  their neighbours, and each region becomes polygons: the light map's cell
+  triangles cut along the band edges, clipped to the face, merged per band.
+  The pieces are flat-mode faces only (FLATREF/FLATMARK); textured mode
+  draws the face as before. A budget keeps the level under the face limit,
+  and a T-junction pass adds piece corners to neighbouring flat polygons so
+  no cracks show.
+* **Flat mode's own palette.** With FLATPAL, the faces' flat colours (lit and
+  unlit) are indices into the user's palette, not Quake's. When textures go
+  off, `r_commit` copies the lump's `cmap` over the colormap (Quake colour
+  and light row to the user's colour: monsters, items, the textures kept in
+  flat mode), points `r_palette` at its `cram` (the colour shifts are made
+  from it, and the vertical blank writes it) and `r_pmap` at its `remap`
+  (particles), and flushes the surface caches; textures on puts Quake's
+  back. Only the master changes these, between frames. The converter picks
+  each texture's colour as the nearest (in OKLab) to its average, brightened
+  with the level's others to an average of about two thirds, saturated
+  (vividness) and optionally spread round the colour wheel by hue rank,
+  weighted by the square root of the area it covers (variety). Shading
+  replaces the light maps for flat mode only: at each light-map sample, 32
+  rays in a cosine-weighted hemisphere through the world BSP and the solid
+  brush models give an openness (a hit at a fraction f of the reach counts
+  f; sky counts open), each ray weighted by 1 + 0.6 z so light comes from
+  above; Quake's light formula with shadow rays adds the light entities;
+  a 3x3 blur, a soft roll-off to the full colour, then the light-to-polygon
+  bands (4 by default) split the faces. The colours a row darker are the
+  nearest of the palette to the colour scaled by (64 - row) / 32. E1M3's
+  4,244 faces take about 1.3 s on two cores. The colour maths uses only
+  +, -, *, / and square roots (the cube roots by Newton's method), so every
+  machine builds the same bytes.
+* **Reduced textures.** A texture's flags byte has the finest mip level
+  drawn in bits 0-1 and, in bit 2, 4 bits a texel: 16 palette bytes, then
+  two texels a byte (the first in the high nibble), up to 256 texels a mip
+  level. The surface cache unpacks them.
+* **Models.** `MF_FRAMEMAP` (0x2000) marks a model with a frame map (after
+  its bounding boxes, one entry per Quake frame naming the stored frame), so
+  animations can keep every nth frame.
+* **The sound bank.** A sound whose offset has bit 31 set is in the shared
+  bank. The level directory in `crt0.s` gains the bank's first page and page
+  count; the bank goes at the start of the levels and maps into the last
+  pages of the 7-page window (the 68000's bank command `0xD000 | n << 6 |
+  page`), so each level has 7 - n pages.
+* **Simpler collision.** The world's clip hulls (1 and 2) are cut into
+  their convex cells (each a polytope, clipped down the original tree from
+  the world's bounds), and a new tree is built over the cells: at each node
+  the plane (from those bounding the cells) that splits fewest cells and
+  halves the open space, where the game's points are; a side whose cells
+  are all of one kind becomes a leaf. The solid space is the same planes'
+  (110,592 sample points a hull classify the same). In open space a point
+  test fell from 15.2 to 11.9 planes (E1M1 hull 1) and from 22.3 to 11.3
+  (E1M2 hull 2, which had a 65-deep branch); the E1M1 bot plays the level
+  exactly as before, `contents_from` dropped from 4.5% to 3.9% of the first
+  CPU, and the run was 2.5% faster.
+* **Flat-shaded weapons.** With `flat_weapons`, md_data.bin holds a second
+  group of weapon sets after the first (the set count doubles): each
+  triangle filled with the average of the skin under it and lit once, as the
+  game draws models in flat mode. The game picks them while textures are
+  off (`md_gun_flat` in src/mdlink.c). The data must stay within 320 KB (the
+  68000 sees the program's first 512 KB, from 0x30000): the default build
+  packs the tiles and lets the 90% screen size use the 80% render (276 KB).
+* **The Mega Drive data** is at ROM offset 0x30000 (68000 address
+  0x8B0000, section `.mddata`, last in the program), so a project's own can
+  replace it without relinking. Weapon tiles can be packed: bit 31 of a
+  set's tile offset, runs and back references up to 4096 bytes, unpacked
+  by the 68000 through a 4 KB ring in work RAM.
+
+## The speed estimate
+
+The editor's speed check runs the level in its copy of the engine and adds
+up, every tick, the renderer's own counts (spans, pixels, face set-ups,
+models and their screen area, texels built into surfaces). The frame time
+is a weighted sum of them, plus the surface building spread over each
+second; the weights were fitted (non-negative least squares) to the cycle
+model's frame rate, second by second, over the E1M3 attract demo in seven
+setups: textured and flat, reduced textures, see-through water, plain
+colours with light-polygon shadows, with and without movers drawn as models.
+Over whole demos the estimate came within 0-8% (textured with Quake's
+textures, the worst, reads 8% high); second by second it is within about
+15% on average. The weights are in `editor/q32x/ui/src/Speed.h`.
+
 ## Building
 
 `./build.sh` (in the top folder) does everything on CachyOS / Arch Linux; see
@@ -542,13 +649,19 @@ the README. By hand you need:
 * an `sh-elf` and `m68k-elf` GNU toolchain (`TC=` in the Makefile, default
   `/opt/toolchains/sega/bin`); the SH-2 compiler is GCC 13 configured with
   `--with-cpu=m2 --with-multilib-list=m2 --with-endian=big`;
-* Python 3 with numpy;
+* CMake and a C++20 compiler, for the converters (`editor/q32x`, built
+  into `build/tools` by the Makefile);
 * Quake's `pak0.pak` copied to `data/pak0.pak`.
 
 ```
 make            # -> quake32x.32x (10 MB), the compatible build
 make FAST=1     # stacks and span loop in SH-2 on-chip RAM (two-way cache mode)
+make program    # editor/q32x/program/q32x-program.bin, the program the editor ships
+make PLAIN=1    # the levels as converted, without the project's optimisations
 ```
+
+The cartridge is the project `data/quake32x.q32x` exported by the editor's
+converter (levels, Mega Drive data, sound bank, cartridge in `build/export`).
 
 The version is in `VERSION`; it goes into the menu (top left) and the
 cartridge header's memo field.
@@ -619,6 +732,14 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
 
 ## Tools
 
+The conversions are C++ since 0.7.0 (`editor/q32x`, the program
+`q32x-convert`; the editor uses the same library). The Python tools below
+are the originals they were ported from: with no editor changes the C++
+versions write the same bytes (checked level by level, and for the Mega
+Drive data and the cartridge). The Python demo tools (`make_demo.py`,
+`plan_route.py` and the route scripts) are still Python.
+
+
 * `tools/mkmap.py`: BSP to level blob converter (`--le` writes a
   little-endian copy for the host build, `--demo` adds a demo).
 * `tools/mkrom.py`: the cartridge: the program, the level directory and the
@@ -640,7 +761,7 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
   32X-HD's description of its timing, and `-analog FROM TO lx ly rx ry lt
   rt` sets its sticks and triggers between two vblanks.
 * `tools/mkmd.py`: the Mega Drive tiles, palettes, pre-rendered weapon
-  sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x4000);
+  sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x30000 since 0.7.0);
   a third argument writes a preview image of every weapon set.
 * `tools/movers.py`: doors, platforms, buttons and triggers worked out from
   the entity lump, shared by `mkmap.py` and `mkents.py`.
@@ -666,8 +787,9 @@ quick runs of any level: `LOG=1` prints the bot and player each frame,
 * The rest of Episode 1 (E1M4-E1M8). The cartridge was kept to the first
   three levels; each of the others would need another 2.5-3.5 MB.
 * Speed in the bigger levels. E1M3 is much heavier than E1M1 (see
-  Performance). Flat shading or a smaller screen helps a lot. Simpler level
-  geometry (fewer, larger faces) is planned as a tool in the level editor.
+  Performance). Flat shading or a smaller screen helps a lot, and so do the
+  editor's tools (reduced textures: 12.4 fps textured against 7.1 in the
+  E1M3 attract demo).
 * Fall damage, the player's death animation, textured monster skins.
 * Simpler monster models (about half the triangles) would make fights
   faster.

@@ -7,6 +7,7 @@
 volatile uint8_t dbg_phase;        /* main.c's, for the logs */
 int g_mode, cur_level;              /* main.c's: how the game is played */
 int pad_kind;                       /* main.c's: the host has an ordinary pad */
+int md_gun_flat;
 static uint8_t cur[2][MD_ROWS][MD_COLS], next[MD_ROWS][MD_COLS];
 static uint32_t back_key = 0xFFFFFFFF;
 

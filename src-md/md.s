@@ -9,7 +9,7 @@
 |            the dither that shades the screen behind the menu
 |   sprites  the view weapon, pre-rendered for each screen size
 | The tiles, palettes and weapon frames come from md_data in cartridge ROM
-| (tools/mkmd.py, at ROM offset 0x4000).
+| (tools/mkmd.py or the editor, at ROM offset 0x30000).
 |
 | The SH-2 master sends 16-bit words through COMM0, numbered in COMM10's
 | low byte; the 68000 acknowledges each one in COMM14's high byte. Words:
@@ -22,7 +22,10 @@
 |   1011 ssss ssss ssss  load weapon set s (one weapon at one screen size)
 |   1100 0000 00pp pppp  the cartridge mapper: pages p .. p+6 into the
 |                        window's pages 1..7 (the SH-2s then see page p at
-|                        0x02080000)
+|                        0x02080000); with a sound bank set, the last n of
+|                        the window's pages are the bank's
+|   1101 000n nnbb bbbb  the shared sound bank: n pages from page b (n = 0:
+|                        none), mapped after the level by the next 1100
 |   1111 xxxx xxxx xxxx  nothing (the SH-2 sends one to know the rest is done)
 |
 | The pad: an ordinary 3/6-button pad, or the XE-1 AP analogue pad (with
@@ -39,7 +42,8 @@
 | The loop runs from work RAM, so the 68000 stays off the cartridge bus the
 | SH-2s depend on, except when it copies tiles.
 
-        .equ    MD_DATA,  0x884000
+        .equ    MD_DATA,  0x8B0000      /* ROM 0x30000 (src/mars.ld) */
+        .equ    RING,     0xFF8000      /* work RAM for unpacking weapon tiles */
         .equ    VDP_DATA, 0xC00000
         .equ    VDP_CTRL, 0xC00004
         .equ    COMM0,    0xA15120
@@ -239,7 +243,7 @@ command:
         jmp     cmd_table(pc,d0.w)
 cmd_table:
         .word   cur_a - cmd_table, cur_b - cmd_table, gun - cmd_table, load - cmd_table
-        .word   bank - cmd_table, loop - cmd_table, loop - cmd_table, loop - cmd_table
+        .word   bank - cmd_table, bankset - cmd_table, loop - cmd_table, loop - cmd_table
 
 cur_a:
         and.w   #0x7FF,d1
@@ -270,11 +274,31 @@ load:
 bank:
         and.w   #0x3F,d1
         lea     0xA130F3,a0
-        moveq   #7-1,d2
+        moveq   #7,d2
+        sub.b   bank_n,d2               /* the level's pages */
+        subq.w  #1,d2
+        bmi.s   2f
 1:      move.b  d1,(a0)
         addq.w  #2,a0
         addq.b  #1,d1
         dbra    d2,1b
+2:      moveq   #0,d2
+        move.b  bank_n,d2               /* then the sound bank's */
+        subq.w  #1,d2
+        bmi.s   4f
+        move.b  bank_pg,d1
+3:      move.b  d1,(a0)
+        addq.w  #2,a0
+        addq.b  #1,d1
+        dbra    d2,3b
+4:      bra.w   loop
+bankset:
+        move.w  d1,d0
+        and.b   #0x3F,d0
+        move.b  d0,bank_pg
+        lsr.w   #6,d1
+        and.b   #7,d1
+        move.b  d1,bank_n
         bra.w   loop
 
 | the weapon's sprites for the frame in gun_req, and its three palettes
@@ -333,23 +357,81 @@ load_set:
         and.l   #0xFFF,d1
         lea     MD_DATA,a0
         cmp.l   16(a0),d1
-        bhs.s   9f
+        bhs.w   9f
         add.l   20(a0),a0
         lsl.w   #5,d1
         add.w   d1,a0
         move.l  a0,cur_set
         st      pal_dirty
         lea     MD_DATA,a1
-        add.l   (a0),a1
+        move.l  (a0),d0
         moveq   #0,d2
         move.w  4(a0),d2
-        lsl.w   #3,d2
+        lsl.l   #5,d2                   /* bytes */
         beq.s   8f
-        subq.w  #1,d2
         move.l  #GUN_CMD,(a6)
+        bclr    #31,d0                  /* packed (the editor's md_pack)? */
+        add.l   d0,a1
+        bne.s   unpack_tiles
+        lsr.l   #2,d2
+        subq.w  #1,d2
 7:      move.l  (a1)+,(a5)
         dbra    d2,7b
 8:      rts
+
+| packed weapon tiles: a byte c < 0x80 is followed by c + 1 bytes to copy;
+| c >= 0x80 repeats (c & 0x7F) + 3 bytes from d back, d the next word
+| (1..4096). a1: the stream, d2.l: the bytes it unpacks to. Written to VRAM
+| a word at a time, through a 4 KB ring of what was written in work RAM.
+unpack_tiles:
+        movem.l d3-d7/a2,-(sp)
+        lea     RING,a2
+        moveq   #0,d3                   /* ring position */
+        sf      d6                      /* a byte waits for its pair */
+1:      tst.l   d2
+        ble.s   9f
+        moveq   #0,d0
+        move.b  (a1)+,d0
+        bmi.s   3f
+        move.w  d0,d4                   /* a run of c + 1 bytes */
+2:      move.b  (a1)+,d0
+        bsr.s   emit
+        subq.l  #1,d2
+        dbra    d4,2b
+        bra.s   1b
+3:      and.w   #0x7F,d0
+        addq.w  #2,d0
+        move.w  d0,d4                   /* (c & 0x7F) + 3 bytes back ... */
+        moveq   #0,d1
+        move.b  (a1)+,d1
+        lsl.w   #8,d1
+        move.b  (a1)+,d1                /* ... d of them */
+        move.w  d3,d7
+        sub.w   d1,d7
+        and.w   #0xFFF,d7
+4:      move.b  0(a2,d7.w),d0
+        addq.w  #1,d7
+        and.w   #0xFFF,d7
+        bsr.s   emit
+        subq.l  #1,d2
+        dbra    d4,4b
+        bra.s   1b
+9:      movem.l (sp)+,d3-d7/a2
+        rts
+emit:
+        move.b  d0,0(a2,d3.w)
+        addq.w  #1,d3
+        and.w   #0xFFF,d3
+        tst.b   d6
+        bne.s   1f
+        move.b  d0,d5
+        st      d6
+        rts
+1:      lsl.w   #8,d5
+        move.b  d0,d5
+        move.w  d5,(a5)
+        sf      d6
+        rts
 9:      clr.l   cur_set
         rts
 
@@ -599,5 +681,7 @@ cur_set:    .long   0                   /* ROM address of the loaded set's entry
 gun_req:    .word   0x00FF
 gun_dirty:  .byte   0
 pal_dirty:  .byte   0                   /* the loaded set's palettes are not in CRAM yet */
+bank_pg:    .byte   0                   /* the shared sound bank's first page */
+bank_n:     .byte   0                   /* ... and its page count (0: none) */
 vbl_flag:   .byte   0
         .even

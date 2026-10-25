@@ -225,7 +225,7 @@ _Static_assert(__builtin_offsetof(mvert_t, depth) == 8 && __builtin_offsetof(mve
 static NOINLINE void xform_verts(const mxform_t *m, const drawent_t *d, mvert_t *mv)
 {
     const lmodel_t *md = d->mdl;
-    const uint8_t *fv = (const uint8_t *)md + md->frames_ofs + d->frame * md->numverts * 4;
+    const uint8_t *fv = model_frame(md, d->frame);
 #ifdef XFORM_ASM
     r_anorms = anorms();
     xform_verts_asm(m, fv, mv, md->numverts);
@@ -414,7 +414,7 @@ static NOINLINE void draw_model(rcpu_t *rc, const drawent_t *d)
     const lmodel_t *md = d->mdl;
     const uint8_t *tris = (const uint8_t *)md + md->tris_ofs;
     const uint8_t *cols = (const uint8_t *)md + md->colors_ofs + d->skin * md->numtris;
-    const uint8_t *fv = (const uint8_t *)md + md->frames_ofs + d->frame * md->numverts * 4;
+    const uint8_t *fv = model_frame(md, d->frame);
     mvert_t *mv = mverts[rc->cpu];
     mxform_t m;
     mclip_t cl;
@@ -560,7 +560,7 @@ static NOINLINE void draw_particles(rcpu_t *rc)
         sy = (view.cy16 + (int32_t)(((int64_t)v[1] * k) >> 20)) >> 16;
         size = v[2] < FX(48) ? 2 : 1;
         depth = clamp16(r);
-        w = dbl(p->color);
+        w = dbl(r_pmap ? r_pmap[p->color] : p->color);
         for (yy = sy; yy < sy + size; yy++) {
             const zrow_t *zr;
             uint16_t *zb;

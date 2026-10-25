@@ -9,6 +9,9 @@ candlist_t cands[2];                /* the BSP walk's output (r_walk) */
 int cand_cur;
 static int cand_ready;              /* cands[cand_cur ^ 1] holds the next frame's */
 uint8_t colormap[64 * 256];
+const uint16_t *r_palette;          /* the palette drawn with: the level's, or flat mode's own */
+const uint8_t *r_pmap;              /* Quake colours into flat mode's own palette (particles), or NULL */
+static int flatpal_on;
 const uint8_t bitmask8[8] = { 1, 2, 4, 8, 16, 32, 64, 128 };
 gaprow_t gaps[SCREENH];
 
@@ -48,11 +51,53 @@ void level_init(const void *blob)
     lvl.numnodes  = h->lump[LVL_NODES].count;
     lvl.numplanes = h->lump[LVL_PLANES].count;
     lvl.visleafs  = h->visleafs;
+    /* the editor's extensions */
+    lvl.flatref = NULL; lvl.flatmark = NULL; lvl.grid = NULL; lvl.leafarea = NULL;
+    lvl.doors = NULL; lvl.ndoors = 0; lvl.leaffar = NULL; lvl.mvmodels = NULL; lvl.mdllod = NULL;
+    lvl.flatpal = NULL;
+    lvl.flags = h->flags;
+    if (h->extofs > 0) {
+        const lextdir_t *x = (const lextdir_t *)(b + h->extofs);
+        int n = x->numlumps < LX_NUMLUMPS ? x->numlumps : LX_NUMLUMPS;
+#define X(i) (i < n && x->lump[i].ofs ? b + x->lump[i].ofs : NULL)
+        lvl.flatref  = (const lflatref_t *)X(LX_FLATREF);
+        lvl.flatmark = (const uint16_t *)X(LX_FLATMARK);
+        lvl.grid     = (const lgrid_t *)X(LX_LIGHTGRID);
+        lvl.leafarea = X(LX_LEAFAREA);
+        lvl.doors    = (const ldoor_t *)X(LX_DOORS);
+        lvl.ndoors   = lvl.doors ? x->lump[LX_DOORS].count : 0;
+        lvl.leaffar  = (const uint16_t *)X(LX_LEAFFAR);
+        lvl.mvmodels = (const uint32_t *)X(LX_MVMODELS);
+        lvl.mdllod   = (const lmdllod_t *)X(LX_MDLLOD);
+        lvl.flatpal  = (const lflatpal_t *)X(LX_FLATPAL);
+#undef X
+        if (!lvl.flatmark) lvl.flatref = NULL;
+        if (!lvl.leafarea || !lvl.doors) { lvl.leafarea = NULL; lvl.doors = NULL; lvl.ndoors = 0; }
+    }
 }
 
 void r_init(void)
 {
     memcpy(colormap, lvl.colormap, sizeof(colormap));
+    r_palette = lvl.palette;
+    r_pmap = NULL;
+    flatpal_on = 0;
+}
+
+/* flat mode's own palette in or out with the textures setting: the
+   colormap the models and kept textures are drawn through, and the
+   palette (update_palette writes it); cached surfaces are in the old one */
+static void r_flatpal(void)
+{
+    int on = !view.textures && lvl.flatpal;
+    if (on == flatpal_on)
+        return;
+    flatpal_on = on;
+    memcpy(colormap, on ? lvl.flatpal->cmap : lvl.colormap, sizeof(colormap));
+    r_palette = on ? lvl.flatpal->cram : lvl.palette;
+    r_pmap = on ? lvl.flatpal->remap : NULL;
+    view.cachegen++;
+    view_next.cachegen = view.cachegen;
 }
 
 /* ------------------------------------------------------------------ view */
@@ -137,18 +182,95 @@ int r_pointleaf(const fixed_t p[3])
 
 /* ------------------------------------------------------------------ PVS */
 
+/* doors that hide what is behind them: the areas the view can reach
+ * through open doors (bit per area) */
+static uint8_t area_vis[32];
+static uint32_t door_state;                 /* the doors open when last marked */
+
+static int area_visible(int a)
+{
+    if (!a)
+        return 1;
+    if (a < 128)
+        return area_vis[a >> 3] & bitmask8[a & 7];
+    {   /* a doorway: seen from either side */
+        const ldoor_t *d = &lvl.doors[a - 128];
+        int k;
+        for (k = 0; k < d->nareas && k < 4; k++)
+            if (area_vis[d->area[k] >> 3] & bitmask8[d->area[k] & 7])
+                return 1;
+        return 0;
+    }
+}
+
+/* which doors are open now (a bit each, the first 32) */
+uint32_t r_door_state(void)
+{
+    uint32_t s = 0;
+    int i;
+    for (i = 0; i < lvl.ndoors && i < 32; i++) {
+        const fixed_t *o = mover_off[lvl.doors[i].mover];
+        if (o[0] | o[1] | o[2])
+            s |= 1u << i;
+    }
+    return s;
+}
+
+static void flood_areas(int leaf)
+{
+    int a = lvl.leafarea[leaf], changed = 1, i, k;
+    memset(area_vis, 0, sizeof(area_vis));
+    if (a >= 128) {
+        const ldoor_t *d = &lvl.doors[a - 128];
+        for (k = 0; k < d->nareas && k < 4; k++)
+            area_vis[d->area[k] >> 3] |= bitmask8[d->area[k] & 7];
+    } else
+        area_vis[a >> 3] |= bitmask8[a & 7];
+    door_state = r_door_state();
+    while (changed) {
+        changed = 0;
+        for (i = 0; i < lvl.ndoors; i++) {
+            const ldoor_t *d = &lvl.doors[i];
+            int any = 0, all = 1;
+            if (i < 32 && !(door_state & (1u << i)))
+                continue;           /* closed */
+            for (k = 0; k < d->nareas && k < 4; k++) {
+                if (area_vis[d->area[k] >> 3] & bitmask8[d->area[k] & 7])
+                    any = 1;
+                else
+                    all = 0;
+            }
+            if (any && !all) {
+                for (k = 0; k < d->nareas && k < 4; k++)
+                    area_vis[d->area[k] >> 3] |= bitmask8[d->area[k] & 7];
+                changed = 1;
+            }
+        }
+    }
+}
+
 static void mark_leaf(int leaf)
 {
     const lleaf_t *lf = &lvl.leafs[leaf];
     int i, n;
+    if (lvl.leafarea && !area_visible(lvl.leafarea[leaf]))
+        return;                     /* behind a closed door */
     BIT_SET(vis.leafs, leaf);
     for (i = 0; i < lf->nummark; i++) {
         int f = lvl.marksurf[lf->firstmark + i];
         if (f != 0xFFFF) {
-            int g = lvl.flatof[f];
             BIT_SET(vis.faces, f);
-            if (g != 0xFFFF)
-                BIT_SET(vis.faces, g);  /* the merged face it is part of */
+            if (lvl.flatref) {
+                /* the flat pieces it shows as (light to polygons) */
+                const lflatref_t *r = &lvl.flatref[f];
+                int k;
+                for (k = 0; k < r->count; k++)
+                    BIT_SET(vis.faces, lvl.flatmark[r->first + k]);
+            } else {
+                int g = lvl.flatof[f];
+                if (g != 0xFFFF)
+                    BIT_SET(vis.faces, g);  /* the merged face it is part of */
+            }
         }
     }
     n = lf->parent;
@@ -164,6 +286,8 @@ void r_markleaves(int leaf)
     int i;
 
     memset(&vis, 0, sizeof(vis));
+    if (lvl.leafarea)
+        flood_areas(leaf);
 
     if (leaf == 0 || lf->visofs < 0) {
         for (i = 1; i <= lvl.visleafs; i++)
@@ -192,10 +316,17 @@ void r_markleaves(int leaf)
     mark_leaf(leaf);
 }
 
+/* have doors opened or closed since the leaves were last marked? */
+int r_doors_changed(void)
+{
+    return lvl.leafarea && r_door_state() != door_state;
+}
+
 /* the prepared view and BSP walk become the ones drawn (both CPUs idle) */
 void r_commit(void)
 {
     memcpy(&view, &view_next, sizeof(view));
+    r_flatpal();
     if (cand_ready) {
         cand_cur ^= 1;
         cand_ready = 0;

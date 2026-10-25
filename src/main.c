@@ -191,14 +191,14 @@ GCODE static void update_palette(int contents)
     if (ps.quad_finished > level_time) { sh[n].r = 0; sh[n].g = 0; sh[n].b = 255; sh[n++].pct = 30; }
     else if (ps.suit_finished > level_time) { sh[n].r = 0; sh[n].g = 255; sh[n].b = 0; sh[n++].pct = 20; }
     else if (ps.invis_finished > level_time) { sh[n].r = 100; sh[n].g = 100; sh[n].b = 100; sh[n++].pct = 100; }
-    key = n;
+    key = n ^ (uint32_t)r_palette;
     for (k = 0; k < n; k++)
         key = key * 2654435761u + ((uint32_t)sh[k].r << 24 | sh[k].g << 16 | sh[k].b << 8 | (sh[k].pct & ~3));
     if (key == last_key)
         return;
     last_key = key;
     for (i = 0; i < 256; i++) {
-        uint16_t c = lvl.palette[i];
+        uint16_t c = r_palette[i];
         int r = (c & 31) << 3, g = ((c >> 5) & 31) << 3, b = ((c >> 10) & 31) << 3;
         for (k = 0; k < n; k++) {
             r += (sh[k].pct * (sh[k].r - r)) >> 8;
@@ -219,7 +219,8 @@ GCODE static void apply_settings(void)
     int vh = vs->h < SCREENH - SBAR_H ? vs->h : SCREENH - SBAR_H;   /* above the status bar */
     if (view_next.lighting != cfg.lighting)
         view_next.cachegen++;
-    view_next.textures = cfg.textures;
+    view_next.textures = cfg.textures && !(lvl.flags & LF_FLAT_ONLY);
+    md_gun_flat = !view_next.textures;
     view_next.lighting = cfg.lighting;
     view_next.far = far_levels[cfg.far] << 16;
     view_next.mesh = cfg.mesh;
@@ -408,7 +409,9 @@ static void update_view(int *viewleaf)
     view_next.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER
                       && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;     /* water, slime, lava */
     update_palette(view_next.underwater ? lvl.leafs[leaf].contents : 0);
-    if (leaf != *viewleaf) {
+    if (lvl.leaffar && lvl.leaffar[leaf] && ((fixed_t)lvl.leaffar[leaf] << 16) < view_next.far)
+        view_next.far = (fixed_t)lvl.leaffar[leaf] << 16;  /* this area's draw distance */
+    if (leaf != *viewleaf || r_doors_changed()) {
         r_markleaves(leaf);
         *viewleaf = leaf;
     }

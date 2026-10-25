@@ -194,6 +194,8 @@ extern visset_t vis;
 #define vis_nodes (vis.nodes)
 #define vis_faces (vis.faces)
 extern uint8_t colormap[64 * 256];
+extern const uint16_t *r_palette;
+extern const uint8_t *r_pmap;
 extern gaprow_t gaps[SCREENH];
 extern volatile uint16_t *r_fb;      /* view window origin; 160 words per rendered row */
 extern volatile uint16_t *r_screen;  /* top left of the screen */
@@ -245,6 +247,8 @@ void r_init(void);
 void r_setup_view(fixed_t org[3], int yaw, int pitch);
 void r_mover_cam(int nmovers);
 void r_markleaves(int leaf);
+int  r_doors_changed(void);         /* doors opened or closed since the last r_markleaves */
+uint32_t r_door_state(void);
 void r_commit(void);
 void r_walk(void);
 int  r_pointleaf(const fixed_t p[3]);

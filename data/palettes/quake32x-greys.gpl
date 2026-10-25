@@ -1,0 +1,261 @@
+GIMP Palette
+Name: Quake 32X greys
+Columns: 16
+# 0-199 greys, black to white; 200-223 four shades each of lava, water and swamp,
+# slime, teleporter, sky and blood; 224-255 Quake's full-bright colours, unchanged.
+  0   0   0	grey
+  1   1   1	grey
+  3   3   3	grey
+  4   4   4	grey
+  5   5   5	grey
+  6   6   6	grey
+  8   8   8	grey
+  9   9   9	grey
+ 10  10  10	grey
+ 12  12  12	grey
+ 13  13  13	grey
+ 14  14  14	grey
+ 15  15  15	grey
+ 17  17  17	grey
+ 18  18  18	grey
+ 19  19  19	grey
+ 21  21  21	grey
+ 22  22  22	grey
+ 23  23  23	grey
+ 24  24  24	grey
+ 26  26  26	grey
+ 27  27  27	grey
+ 28  28  28	grey
+ 29  29  29	grey
+ 31  31  31	grey
+ 32  32  32	grey
+ 33  33  33	grey
+ 35  35  35	grey
+ 36  36  36	grey
+ 37  37  37	grey
+ 38  38  38	grey
+ 40  40  40	grey
+ 41  41  41	grey
+ 42  42  42	grey
+ 44  44  44	grey
+ 45  45  45	grey
+ 46  46  46	grey
+ 47  47  47	grey
+ 49  49  49	grey
+ 50  50  50	grey
+ 51  51  51	grey
+ 53  53  53	grey
+ 54  54  54	grey
+ 55  55  55	grey
+ 56  56  56	grey
+ 58  58  58	grey
+ 59  59  59	grey
+ 60  60  60	grey
+ 62  62  62	grey
+ 63  63  63	grey
+ 64  64  64	grey
+ 65  65  65	grey
+ 67  67  67	grey
+ 68  68  68	grey
+ 69  69  69	grey
+ 70  70  70	grey
+ 72  72  72	grey
+ 73  73  73	grey
+ 74  74  74	grey
+ 76  76  76	grey
+ 77  77  77	grey
+ 78  78  78	grey
+ 79  79  79	grey
+ 81  81  81	grey
+ 82  82  82	grey
+ 83  83  83	grey
+ 85  85  85	grey
+ 86  86  86	grey
+ 87  87  87	grey
+ 88  88  88	grey
+ 90  90  90	grey
+ 91  91  91	grey
+ 92  92  92	grey
+ 94  94  94	grey
+ 95  95  95	grey
+ 96  96  96	grey
+ 97  97  97	grey
+ 99  99  99	grey
+100 100 100	grey
+101 101 101	grey
+103 103 103	grey
+104 104 104	grey
+105 105 105	grey
+106 106 106	grey
+108 108 108	grey
+109 109 109	grey
+110 110 110	grey
+111 111 111	grey
+113 113 113	grey
+114 114 114	grey
+115 115 115	grey
+117 117 117	grey
+118 118 118	grey
+119 119 119	grey
+120 120 120	grey
+122 122 122	grey
+123 123 123	grey
+124 124 124	grey
+126 126 126	grey
+127 127 127	grey
+128 128 128	grey
+129 129 129	grey
+131 131 131	grey
+132 132 132	grey
+133 133 133	grey
+135 135 135	grey
+136 136 136	grey
+137 137 137	grey
+138 138 138	grey
+140 140 140	grey
+141 141 141	grey
+142 142 142	grey
+144 144 144	grey
+145 145 145	grey
+146 146 146	grey
+147 147 147	grey
+149 149 149	grey
+150 150 150	grey
+151 151 151	grey
+152 152 152	grey
+154 154 154	grey
+155 155 155	grey
+156 156 156	grey
+158 158 158	grey
+159 159 159	grey
+160 160 160	grey
+161 161 161	grey
+163 163 163	grey
+164 164 164	grey
+165 165 165	grey
+167 167 167	grey
+168 168 168	grey
+169 169 169	grey
+170 170 170	grey
+172 172 172	grey
+173 173 173	grey
+174 174 174	grey
+176 176 176	grey
+177 177 177	grey
+178 178 178	grey
+179 179 179	grey
+181 181 181	grey
+182 182 182	grey
+183 183 183	grey
+185 185 185	grey
+186 186 186	grey
+187 187 187	grey
+188 188 188	grey
+190 190 190	grey
+191 191 191	grey
+192 192 192	grey
+193 193 193	grey
+195 195 195	grey
+196 196 196	grey
+197 197 197	grey
+199 199 199	grey
+200 200 200	grey
+201 201 201	grey
+202 202 202	grey
+204 204 204	grey
+205 205 205	grey
+206 206 206	grey
+208 208 208	grey
+209 209 209	grey
+210 210 210	grey
+211 211 211	grey
+213 213 213	grey
+214 214 214	grey
+215 215 215	grey
+217 217 217	grey
+218 218 218	grey
+219 219 219	grey
+220 220 220	grey
+222 222 222	grey
+223 223 223	grey
+224 224 224	grey
+226 226 226	grey
+227 227 227	grey
+228 228 228	grey
+229 229 229	grey
+231 231 231	grey
+232 232 232	grey
+233 233 233	grey
+234 234 234	grey
+236 236 236	grey
+237 237 237	grey
+238 238 238	grey
+240 240 240	grey
+241 241 241	grey
+242 242 242	grey
+243 243 243	grey
+245 245 245	grey
+246 246 246	grey
+247 247 247	grey
+249 249 249	grey
+250 250 250	grey
+251 251 251	grey
+252 252 252	grey
+254 254 254	grey
+255 255 255	grey
+104  29   7	lava
+162  45  11	lava
+232  64  16	lava
+240 131 100	lava
+ 18  68  65	water and swamp
+ 28 106 101	water and swamp
+ 40 152 144	water and swamp
+115 188 183	water and swamp
+ 72  94  14	slime (acid)
+112 146  22	slime (acid)
+160 208  32	slime (acid)
+193 224 110	slime (acid)
+ 68  29  97	teleporter
+106  45 151	teleporter
+152  64 216	teleporter
+188 131 230	teleporter
+ 43  40  97	sky
+ 67  62 151	sky
+ 96  88 216	sky
+152 146 230	sky
+ 68   0   0	blood
+105   0   0	blood
+150   0   0	blood
+187  89  89	blood
+ 43   0   0	Quake full bright 224
+ 59   0   0	Quake full bright 225
+ 75   7   0	Quake full bright 226
+ 95   7   0	Quake full bright 227
+111  15   0	Quake full bright 228
+127  23   7	Quake full bright 229
+147  31   7	Quake full bright 230
+163  39  11	Quake full bright 231
+183  51  15	Quake full bright 232
+195  75  27	Quake full bright 233
+207  99  43	Quake full bright 234
+219 127  59	Quake full bright 235
+227 151  79	Quake full bright 236
+231 171  95	Quake full bright 237
+239 191 119	Quake full bright 238
+247 211 139	Quake full bright 239
+167 123  59	Quake full bright 240
+183 155  55	Quake full bright 241
+199 195  55	Quake full bright 242
+231 227  87	Quake full bright 243
+127 191 255	Quake full bright 244
+171 231 255	Quake full bright 245
+215 255 255	Quake full bright 246
+103   0   0	Quake full bright 247
+139   0   0	Quake full bright 248
+179   0   0	Quake full bright 249
+215   0   0	Quake full bright 250
+255   0   0	Quake full bright 251
+255 243 147	Quake full bright 252
+255 247 199	Quake full bright 253
+255 255 255	Quake full bright 254
+159  91  83	Quake full bright 255

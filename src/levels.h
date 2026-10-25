@@ -8,6 +8,7 @@ int lvl_count(void);                /* levels in the cartridge, in the order of 
 const char *lvl_file(int n);        /* "e1m1" ... */
 const void *lvl_map(int n);         /* map level n in; returns its blob */
 int lvl_demo(void);                 /* the level with the attract demo, -1 none */
+const uint8_t *lvl_bank(void);      /* the shared sound bank, NULL none */
 
 /* what the game asks the main loop to do between frames */
 enum {

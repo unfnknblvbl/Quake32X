@@ -14,6 +14,7 @@
  * near the listener, as Quake mixes its static channels, and sets their
  * volumes. */
 #include "g_local.h"
+#include "levels.h"
 
 #define MIX_RATE    11025           /* the samples' own rate */
 #define OUT_RATE    (MIX_RATE * 2)  /* PWM rate: each mixed sample twice */
@@ -47,6 +48,13 @@ static volatile int32_t snd_running;     /* the slave's mixer is going */
 static int pwm_cycle, cur_buf __attribute__((unused));
 static const int32_t *sound_table;      /* SND_NUM x { offset, length, loop } */
 static const uint8_t *sound_base;
+static const uint8_t *bank_base;        /* the shared sound bank (offsets with bit 31) */
+
+/* a sound table offset as an address: in the level, or in the bank */
+static inline const uint8_t *snd_addr(const uint8_t *base, const uint8_t *bank, int32_t ofs)
+{
+    return ofs < 0 ? bank + (ofs & 0x7FFFFFFF) : base + ofs;
+}
 
 #ifndef HOST
 #define PWM_CTRL    REG16(0x20004030)
@@ -102,6 +110,7 @@ GCODE void snd_init(void)
     /* (the slave reads these two cache-through) */
     sound_table = (const int32_t *)(lvl.base + lvl.hdr->lump[LVL_SOUNDS].ofs);
     sound_base = lvl.base;
+    bank_base = lvl_bank();
     nstatic = 0;
     for (i = 0; i < NSTATIC; i++)
         st_sound[i] = CMD_SILENCE;
@@ -257,6 +266,7 @@ static void take_commands(void)
     volatile sndcmd_t *q = (volatile sndcmd_t *)QV(cmdq);
     const int32_t *tab = *(const int32_t *volatile *)QV(&sound_table);
     const uint8_t *base = *(const uint8_t *volatile *)QV(&sound_base);
+    const uint8_t *bank = *(const uint8_t *volatile *)QV(&bank_base);
     uint16_t t = *tail;
     while (t != *head) {
         const volatile sndcmd_t *c = &q[t & (QSIZE - 1)];
@@ -280,9 +290,9 @@ static void take_commands(void)
             }
             if (ch->sound != s || ch->left <= 0) {
                 const int32_t *e = tab + s * 3;
-                ch->data = base + e[0];
+                ch->data = snd_addr(base, bank, e[0]);
                 ch->left = e[1];
-                ch->loop = e[2] >= 0 ? base + e[0] + e[2] : base + e[0];
+                ch->loop = e[2] >= 0 ? ch->data + e[2] : ch->data;
                 ch->looplen = e[2] >= 0 ? e[1] - e[2] : e[1];
                 ch->sound = s;
             }
@@ -295,7 +305,7 @@ static void take_commands(void)
             if (chans[k].left <= 0) { best = k; break; }
             if (chans[k].left < chans[best].left) best = k;
         }
-        chans[best].data = base + tab[s * 3];
+        chans[best].data = snd_addr(base, bank, tab[s * 3]);
         chans[best].left = tab[s * 3 + 1];
         chans[best].loop = NULL;
         chans[best].lvol = c->lvol;

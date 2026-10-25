@@ -43,6 +43,15 @@ typedef struct {
 #define MF_TRACER2  64
 #define MF_TRACER3  128
 #define MF_FULLBRIGHT 0x4000         /* (ours) drawn without lighting: flames */
+#define MF_FRAMEMAP  0x2000          /* (ours) frames trimmed: a map after the boxes */
+
+/* a frame's vertices (a trimmed model's frames share stored frames) */
+static inline const uint8_t *model_frame(const lmodel_t *md, int frame)
+{
+    if (md->flags & MF_FRAMEMAP)
+        frame = ((const uint8_t *)md + md->bbox_ofs + md->numframes * 6)[frame];
+    return (const uint8_t *)md + md->frames_ofs + frame * md->numverts * 4;
+}
 
 /* a door, secret door, plat or button (ROM), written by tools/mkents.py */
 typedef struct {

@@ -22,7 +22,32 @@ typedef struct {
     int32_t yaw;
     int16_t headnode, headnode1, numnodes, nworld, visleafs, headnode2;
     int16_t worldtype, pad;              /* 0 medieval, 1 metal (runic), 2 base */
+    int32_t  extofs;                     /* the extension directory (game 0.7.0), 0: none */
+    int32_t  flags;                      /* LF_ */
 } lheader_t;
+
+#define LF_FLAT_ONLY 1                   /* no textures or light maps: flat shading only */
+
+/* extension lumps (the editor's optimisations), in the directory at extofs */
+enum {
+    LX_FLATREF, LX_FLATMARK, LX_LIGHTGRID, LX_LEAFAREA, LX_DOORS, LX_LEAFFAR,
+    LX_MVMODELS, LX_MDLLOD, LX_FLATPAL, LX_NUMLUMPS
+};
+
+typedef struct {
+    char    magic[4];                    /* "Q32X" */
+    int32_t numlumps;
+    struct { int32_t ofs, count; } lump[LX_NUMLUMPS];
+} lextdir_t;
+
+typedef struct { uint16_t first; uint8_t count, pad; } lflatref_t;   /* into flatmark */
+typedef struct { uint8_t mover, nareas, area[4]; uint16_t pad; } ldoor_t;
+typedef struct { int16_t org[3]; uint16_t step, dims[3], pad; uint8_t v[]; } lgrid_t;
+typedef struct { uint32_t ofs; uint16_t dist, pad; } lmdllod_t;
+/* flat mode in the user's palette: its 32X colours, Quake's colours as its
+   (particles), and the colormap from Quake's colours to its (models, the
+   textures kept in flat mode); the faces' flat colours are its already */
+typedef struct { uint16_t cram[256]; uint8_t remap[256]; uint8_t cmap[64 * 256]; } lflatpal_t;
 
 typedef struct { fixed_t n[3]; fixed_t dist; } lplane_t;            /* 16 */
 
@@ -121,6 +146,18 @@ typedef struct {
     const lfgeom_t    *fgeom;
     const int16_t     *nodeparent;
     const uint8_t     *backtile;         /* 64x64 border tile */
+    /* the editor's extensions (NULL when the level has none) */
+    const lflatref_t  *flatref;          /* per face: the flat pieces it shows as */
+    const uint16_t    *flatmark;
+    const lgrid_t     *grid;             /* model lighting */
+    const uint8_t     *leafarea;         /* per leaf: its area (doors divide them) */
+    const ldoor_t     *doors;
+    int                ndoors;
+    const uint16_t    *leaffar;          /* per leaf: draw distance in units, 0 none */
+    const uint32_t    *mvmodels;         /* per mover: a model drawn in its place */
+    const lmdllod_t   *mdllod;           /* per model id: a simpler model far away */
+    const lflatpal_t  *flatpal;          /* flat mode's own palette */
+    int                flags;            /* LF_ */
     /* flat shading: faces merged where their colours match (tools/mkmap.py) */
     const uint16_t    *flatof;           /* per face: the merged face it is part of, or 0xFFFF */
     const lflatnode_t *flatnode;         /* per node: its faces in flat mode */

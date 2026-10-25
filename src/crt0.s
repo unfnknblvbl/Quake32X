@@ -163,12 +163,14 @@
 ! 0x800: all 68000 code, linked to run at 0x880800
         .incbin "build/m68k.bin"
 
-! 0x4000: the Mega Drive data (0x884000 for the 68000)
-        .org    0x4000
+! The Mega Drive data has a page-0 address of its own (src/mars.ld), so the
+! editor can put new data in a built program without linking it again.
+        .section .mddata,"a"
         .global _md_data
 _md_data:
         .incbin "build/md_data.bin"
         .balign 16
+        .section .romhdr,"ax"
 
 !-----------------------------------------------------------------------
 ! Everything below lives in SDRAM (copied there by the 32X boot ROM)
@@ -448,4 +450,6 @@ _level_dir:
         .ascii  "LEVELDIR"
         .long   0                       /* count */
         .space  16 * 8                  /* first page, pages, flags, name[12] */
+        .byte   0, 0                    /* the shared sound bank: first page, pages (0: none) */
+        .short  0
         .balign 16

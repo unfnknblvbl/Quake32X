@@ -2,7 +2,7 @@
 #include "g_local.h"
 
 player_t player;
-settings_t cfg = { 1, 1, 6, 1, 0, 0, 0, 2, 0, { BTN_C, BTN_B, BTN_A, 0 }, 0,
+settings_t cfg = { 1, 1, 6, 1, 0, 3, 0, 2, 0, { BTN_C, BTN_B, BTN_A, 0 }, 0,
                    0, 0, 3, 3, 0, 1, 0, { AN_RT, AN_LT, BTN_C } };
 analog_t an_in;
 

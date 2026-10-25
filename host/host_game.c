@@ -14,6 +14,10 @@
 
 int32_t host_div_result;
 
+/* the shared sound bank (BANK=file) */
+const uint8_t *host_bank;
+const uint8_t *lvl_bank(void) { return host_bank; }
+
 uint16_t host_comm0;
 volatile uint16_t *r_fb, *r_screen;
 static uint16_t fbmem[SCREENW * SCREENH];
@@ -177,7 +181,7 @@ int main(int argc, char **argv)
                 pressed = 0;
             }
         if (getenv("FLAT")) cfg.textures = 0;
-        view_next.textures = cfg.textures;
+        view_next.textures = cfg.textures && !(lvl.flags & LF_FLAT_ONLY);
         view_next.lighting = cfg.lighting;
         view_next.mesh = cfg.mesh;
         view_next.far = far_levels[cfg.far] << 16;
@@ -190,13 +194,28 @@ int main(int argc, char **argv)
         r_setup_view(eye, player.yaw, player.pitch);
         leaf = r_pointleaf(eye);
         view_next.underwater = lvl.leafs[leaf].contents <= CONTENTS_WATER && lvl.leafs[leaf].contents >= CONTENTS_WATER - 2;
-        if (leaf != viewleaf) { r_markleaves(leaf); viewleaf = leaf; }
+        if (lvl.leaffar && lvl.leaffar[leaf] && ((fixed_t)lvl.leaffar[leaf] << 16) < view_next.far)
+            view_next.far = (fixed_t)lvl.leaffar[leaf] << 16;
+        if (leaf != viewleaf || r_doors_changed()) { r_markleaves(leaf); viewleaf = leaf; }
         g_build_scene();
         r_walk();
         r_commit();
         g_commit_scene();
         r_render(&rc[0], 0, view.vh / 2);
         r_render(&rc[1], view.vh / 2, view.vh);
+        if (getenv("AREADBG") && fr == atoi(getenv("AREADBG")) && lvl.leafarea) {
+            /* which drawable things the doors hid */
+            int vl = r_pointleaf(view.org), i2;
+            fprintf(stderr, "view leaf %d area %d doors %x\n", vl, lvl.leafarea[vl], r_door_state());
+            for (i2 = 0; i2 < MAX_ENTS; i2++)
+                if (ents[i2].type != ET_FREE)
+                    fprintf(stderr, "ent %d model %d leaf %d area %d vis %d\n", i2, ents[i2].model, ents[i2].leaf,
+                            lvl.leafarea[ents[i2].leaf], LEAF_VISIBLE(ents[i2].leaf));
+            { void g_debug_statics(void); g_debug_statics(); }
+            for (i2 = 0; i2 < lvl.ndoors; i2++)
+                fprintf(stderr, "door %d mover %d areas %d %d %d %d (%d)\n", i2, lvl.doors[i2].mover, lvl.doors[i2].area[0],
+                        lvl.doors[i2].area[1], lvl.doors[i2].area[2], lvl.doors[i2].area[3], lvl.doors[i2].nareas);
+        }
         overlays_draw(0, 0, 150, fr < 120);
         if (getenv("LOG")) {
             int nm = 0, nc = 0;

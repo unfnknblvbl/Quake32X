@@ -88,6 +88,9 @@ static uint8_t xe_read(void)
     return xe_nib[k] | ((k & 1) << 4);
 }
 static int md_on;
+#ifdef PAD_ADAPTER
+#include "adapter_sim.h"     /* the pad adapter's tests (its own project): its firmware and PIO */
+#endif
 static uint8_t md_ctx[16384] __attribute__((aligned(16)));
 
 static uint32_t md_vector(uint32_t a)
@@ -100,6 +103,10 @@ static uint32_t md_vector(uint32_t a)
 static uint8_t io_read(uint32_t a)
 {
     if (a == 0xA10001) return 0xA0;
+#ifdef PAD_ADAPTER
+    if (a == 0xA10003 && adp_mode)
+        return adp_read() | (pad_th << 6);
+#endif
     if (a == 0xA10003 && xe_on)
         return xe_read() | (pad_th << 6);
     if (a == 0xA10003) {
@@ -127,6 +134,10 @@ static void io_write(uint32_t a, uint8_t v)
 {
     if (a == 0xA10003) {
         int th = (v >> 6) & 1;
+#ifdef PAD_ADAPTER
+        if (adp_mode)
+            adp_th(th);
+#endif
         if (pad_th && !th) {
             pad_count++;
             if (xe_on)
@@ -306,6 +317,10 @@ static void md_vblank_start(uint16_t pad)
 {
     md_pad = pad;
     pad_count = 0;
+#ifdef PAD_ADAPTER
+    if (adp_mode)
+        adp_set(pad, xe_axes);
+#endif
     vdp_invbl = 1;
     if (vreg[1] & 0x20) {
         vdp_vint = 1;

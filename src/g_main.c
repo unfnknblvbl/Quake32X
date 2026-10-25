@@ -1109,6 +1109,9 @@ GCODE void g_build_scene(void)
         m = models[e->model];
         if (!m)
             continue;
+        if (lvl.mdllod && lvl.mdllod[e->model].ofs
+            && vlen_units(e->org, view_next.org) > lvl.mdllod[e->model].dist)
+            m = (const lmodel_t *)(lvl.base + lvl.mdllod[e->model].ofs);   /* the simpler one, far away */
         yaw = (m->flags & MF_ROTATE) ? (uint16_t)(level_time * 455 / 2) : e->yaw;
         if (e->lightdirty) {
             fixed_t c[3];
@@ -1129,6 +1132,23 @@ GCODE void g_build_scene(void)
             o[2] = FX(statics[i].org[2]);
             add_draw(models[statics[i].model], statics[i].frame, 0, o, statics[i].yaw, 0, 0);
         }
+    /* doors, lifts and buttons the editor made into models */
+    if (lvl.mvmodels) {
+        int nm = lvl.hdr->lump[LVL_MOVERS].count;
+        if (nm > MAX_MOVERS) nm = MAX_MOVERS;
+        for (i = 0; i < nm; i++) {
+            const lmodel_t *mm;
+            fixed_t c[3];
+            int k;
+            if (!lvl.mvmodels[i])
+                continue;
+            mm = (const lmodel_t *)(lvl.base + lvl.mvmodels[i]);
+            for (k = 0; k < 3; k++)
+                c[k] = mover_off[i][k] + mm->origin[k] + (mm->scale[k] << 7);
+            if (LEAF_VISIBLE(r_pointleaf(c)))
+                add_draw(mm, 0, 0, mover_off[i], 0, 0, g_light_point(c));
+        }
+    }
     n = ndraw;
     /* depth for as many as fit; the biggest (nearest) on screen are drawn
        back to front without it */
@@ -1248,3 +1268,15 @@ GCODE int g_hud_text(char *buf)
     *p = 0;
     return ps.quad_finished > level_time;
 }
+
+#ifdef HOST
+#include <stdio.h>
+/* host debugging: the static things and whether their leaves are visible */
+void g_debug_statics(void)
+{
+    int i;
+    for (i = 0; i < nstatics; i++)
+        fprintf(stderr, "static %d model %d leaf %d area %d vis %d\n", i, statics[i].model, statics[i].leaf,
+                lvl.leafarea ? lvl.leafarea[statics[i].leaf] : -1, LEAF_VISIBLE(statics[i].leaf));
+}
+#endif

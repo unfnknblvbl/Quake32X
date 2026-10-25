@@ -21,6 +21,8 @@ typedef struct {
     char     magic[8];
     uint32_t count;
     ldirent_t lv[8];
+    uint8_t  bank_page, bank_npages;    /* the shared sound bank (0 pages: none) */
+    uint16_t pad;
 } leveldir_t;
 
 #ifndef HOST
@@ -57,9 +59,18 @@ GCODE int lvl_demo(void)
  * slave's does at the start of its next frame) */
 GCODE const void *lvl_map(int n)
 {
+    if (level_dir.bank_npages)
+        md_bank_set(level_dir.bank_page, level_dir.bank_npages);
     md_bank(level_dir.lv[n].page);
     md_sync();
     SH2_CCR = CCR_PURGE;
     return LEVEL_WINDOW;
+}
+/* the shared sound bank, mapped in after the level's pages (NULL: none) */
+GCODE const uint8_t *lvl_bank(void)
+{
+    if (!level_dir.bank_npages)
+        return NULL;
+    return (const uint8_t *)LEVEL_WINDOW + (7 - level_dir.bank_npages) * 0x80000;
 }
 #endif

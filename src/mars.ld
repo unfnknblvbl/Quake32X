@@ -1,6 +1,7 @@
 /* Quake 32X memory map
  *   ROM   0x02000000  4 MB  (SH-2 view of the cartridge while RV=0): this
- *                     program in the first 512 KB page; the level in play
+ *                     program in the first 512 KB page, the Mega Drive data
+ *                     from 0x02030000 in it; the level in play
  *                     mapped at 0x02080000 (src/level.c, tools/mkrom.py)
  *   SDRAM 0x06000000  256 KB
  * The SH-2 program (code + data) runs from SDRAM: the 32X boot ROM copies
@@ -65,6 +66,15 @@ SECTIONS
         KEEP(*(.romdata))
         . = ALIGN(16);
         __rom_end = .;
+    } > rom
+
+    /* the Mega Drive data (tools/mkmd.py, the editor): at a fixed place,
+       0x8B0000 for the 68000, so it can be replaced in a built ROM */
+    ASSERT(__rom_end <= 0x02030000, "the program reaches the Mega Drive data (0x30000)")
+    .mddata 0x02030000 : AT(0x02030000)
+    {
+        KEEP(*(.mddata))
+        __md_end = .;
     } > rom
 
     .bss __sdram_end (NOLOAD) :

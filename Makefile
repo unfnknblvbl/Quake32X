@@ -35,21 +35,31 @@ build/m68k.bin: src-md/md.s src-md/md.ld | build
 	$(MDLD) -T src-md/md.ld -o build/md.elf build/md.o
 	$(MDOBJCOPY) -O binary -j .text -j .ramtext build/md.elf $@
 
-# Mega Drive tiles, palettes and the pre-rendered view weapons
-build/md_data.bin: tools/mkmd.py data/pak0.pak | build
-	python3 -I tools/mkmd.py data/pak0.pak $@
+# The converters (levels, the Mega Drive data, the cartridge) are the
+# editor's: editor/q32x, built with CMake into build/tools. (tools/*.py are
+# the original Python versions; the C++ ones give the same bytes.)
+CONVERT_SRC = $(wildcard editor/q32x/lib/src/*.cpp editor/q32x/lib/include/q32x/*.h editor/q32x/cli/*.cpp) editor/q32x/CMakeLists.txt
+CONVERT = build/tools/q32x-convert
 
-LVLTOOLS = tools/mkmap.py tools/mkents.py tools/movers.py tools/anorms.py tools/mkdemo.py tools/dem.py
+$(CONVERT): $(CONVERT_SRC) | build
+	cmake -S editor/q32x -B build/tools -DCMAKE_BUILD_TYPE=Release -DQ32X_BUILD_TESTS=OFF > /dev/null
+	cmake --build build/tools --target q32x-convert > /dev/null
+	@touch $@
+
+# Mega Drive tiles, palettes and the pre-rendered view weapons
+build/md_data.bin: $(CONVERT) data/pak0.pak | build
+	$(CONVERT) mdgfx --packed --flat-weapons --weapon-sizes 0,2,2,3,4,5 data/pak0.pak $@
 
 # the host build's level (little-endian)
-data/$(MAP)_le.lvl: $(LVLTOOLS) data/pak0.pak
-	python3 -I tools/mkmap.py --le data/pak0.pak maps/$(MAP).bsp $@
+data/$(MAP)_le.lvl: $(CONVERT) data/pak0.pak
+	$(CONVERT) level --le data/pak0.pak maps/$(MAP).bsp $@
 
-build/%.lvl: $(LVLTOOLS) data/pak0.pak | build
-	python3 -I tools/mkmap.py data/pak0.pak maps/$*.bsp $@ $(DEMO_$*)
+build/%.lvl: $(CONVERT) data/pak0.pak | build
+	$(CONVERT) level data/pak0.pak maps/$*.bsp $@ $(DEMO_$*)
 
-src/g_ids.h src/g_frames.h: tools/mkents.py
-	python3 -I tools/mkents.py --header src/g_ids.h src/g_frames.h data/pak0.pak
+src/g_ids.h src/g_frames.h: editor/q32x/lib/src/gamedata.cpp
+	$(MAKE) $(CONVERT)
+	$(CONVERT) headers data/pak0.pak src/g_ids.h src/g_frames.h
 
 # FAST=1: stacks and the span loop in SH-2 on-chip RAM (two-way cache mode).
 # Faster, but needs an emulator/hardware that supports the cache data array
@@ -72,13 +82,12 @@ endif
 # the demo bot's route (pause menu, Demo)
 OBJS   += build/bot_data.o
 
-build/bot_data.c: tools/make_bot.py data/$(MAP)_botroute.json | build
-	python3 tools/make_bot.py data/$(MAP)_botroute.json $@
+build/bot_data.c: $(CONVERT) data/$(MAP)_botroute.json | build
+	$(CONVERT) botroute data/$(MAP)_botroute.json $@
 
 build/bot_data.o: build/bot_data.c src/bot.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-build/bot_data.c: tools/make_bot.py
 
 build/demo_data.c: tools/make_demo.py data/$(MAP)_route.json | build
 	python3 tools/make_demo.py data/$(MAP)_route.json $@
@@ -113,9 +122,31 @@ build/%.o: src/%.c src/*.h | build
 build/q32x.elf: $(OBJS) src/mars.ld
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) -lgcc
 
-quake32x.32x: build/q32x.elf tools/mkrom.py $(LVLS) VERSION
+# The cartridge is the project data/quake32x.q32x exported: the three
+# levels with the editor's optimisations that keep the picture as it is
+# (door areas, simpler collision, merged faces, vertex order, the shared
+# sound bank, packed weapon tiles with flat-shaded versions). PLAIN=1 builds
+# the levels as converted without them.
+ifeq ($(PLAIN),1)
+quake32x.32x: build/q32x.elf $(CONVERT) $(LVLS) VERSION
 	$(OBJCOPY) -O binary $< build/q32x.bin
-	python3 -I tools/mkrom.py --version $(VERSION) build/q32x.bin $@ $(LVLS)
+	$(CONVERT) rom --version $(VERSION) build/q32x.bin $@ $(LVLS)
+else
+quake32x.32x: build/q32x.elf $(CONVERT) data/quake32x.q32x data/pak0.pak VERSION
+	$(OBJCOPY) -O binary $< build/q32x.bin
+	$(CONVERT) export data/quake32x.q32x build/export
+	cp build/export/quake32x.32x $@
+endif
+
+# the game program the editor ships (editor/q32x/program): the Mega Drive
+# data (Quake's font, border and weapon renders) left out, since the editor
+# puts in the project's own when it builds a cartridge
+program: build/q32x.elf
+	$(OBJCOPY) -O binary $< build/q32x.bin
+	mkdir -p editor/q32x/program
+	head -c 196608 build/q32x.bin > editor/q32x/program/q32x-program.bin
+	printf 'MDQ1' >> editor/q32x/program/q32x-program.bin
+	head -c 60 /dev/zero >> editor/q32x/program/q32x-program.bin
 
 build:
 	mkdir -p build
@@ -123,4 +154,4 @@ build:
 clean:
 	rm -rf build quake32x.32x
 
-.PHONY: all clean
+.PHONY: program all clean

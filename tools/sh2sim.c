@@ -391,7 +391,10 @@ static uint32_t reg_read(cpu_t *c, uint32_t a, int size)
     }
     if (off == 0x100) return vdp_mode;
     if (off == 0x10A || off == 0x10B) return size == 1 ? (off & 1 ? fbctl_read(c) & 0xFF : fbctl_read(c) >> 8) : fbctl_read(c);
-    if (off >= 0x200 && off < 0x400) return cram[(off - 0x200) >> 1];
+    if (off >= 0x200 && off < 0x400) {
+        if (size == 4) return ((uint32_t)cram[(off - 0x200) >> 1] << 16) | (off + 2 < 0x400 ? cram[(off + 2 - 0x200) >> 1] : 0);
+        return cram[(off - 0x200) >> 1];
+    }
     return 0;
 }
 
@@ -451,7 +454,12 @@ static void reg_write(cpu_t *c, uint32_t a, int size, uint32_t v)
     if (off == 0x16) { c->vint_pending = 0; return; }
     if (off == 0x100) { vdp_mode = v; return; }
     if (off == 0x10A || off == 0x10B) { fs_pending = v & 1; t_flipreq = c->cyc; return; }
-    if (off >= 0x200 && off < 0x400) { cram[(off - 0x200) >> 1] = v; return; }
+    if (off >= 0x200 && off < 0x400) {
+        /* a long write is two word writes on the 32X's 16-bit bus, the high word first */
+        if (size == 4) { cram[(off - 0x200) >> 1] = v >> 16; if (off + 2 < 0x400) cram[(off + 2 - 0x200) >> 1] = v; }
+        else cram[(off - 0x200) >> 1] = v;
+        return;
+    }
 }
 
 static uint32_t sdram_or_rom_read32(uint32_t a)
@@ -1023,6 +1031,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-noirq")) noirq = 1;
 #ifdef MD68K
         else if (!strcmp(argv[i], "-nomd")) md_on = -1;
+#ifdef PAD_ADAPTER
+        else if (!strcmp(argv[i], "-adapter") && i + 1 < argc) { adp_init(strcmp(argv[++i], "xe") ? 2 : 1); xe_on = 0; }
+        else if (!strcmp(argv[i], "-adapter-lat") && i + 1 < argc) adp_lat_ns = atof(argv[++i]) * 1000.0;
+#endif
         else if (!strcmp(argv[i], "-xe1ap")) xe_on = 1;
         else if (!strcmp(argv[i], "-xe1ap-noext")) { xe_on = 1; xe_ext = 0; }
         else if (!strcmp(argv[i], "-analog") && i + 9 < argc && nanalog < 64) {
@@ -1116,6 +1128,10 @@ int main(int argc, char **argv)
                 for (w = 0; w < nwatch; w++)
                     for (k = 0; k < watch_n[w]; k++)
                         fprintf(vlog, " %d", (int32_t)rd_be(&sdram[(watch_addr[w] & 0x3FFFF) + 4 * k], 4));
+#ifdef PAD_ADAPTER
+                if (adp_mode)
+                    fprintf(vlog, " pad=%04x reports=%ld restarts=%ld", comm[6], adp_reports, adp_md6_restarts);
+#endif
                 fprintf(vlog, "\n");
             }
             now_vbl++;
@@ -1123,7 +1139,11 @@ int main(int argc, char **argv)
             for (i = 0; i < npads; i++)
                 if ((int)now_vbl >= pads[i].from && (int)now_vbl <= pads[i].to) pad_now |= pads[i].b;
 #ifdef MD68K
-            if (xe_on) {
+            if (xe_on
+#ifdef PAD_ADAPTER
+                || adp_mode
+#endif
+                ) {
                 static const int map[6] = { 0, 1, 2, 4, 5, 6 };   /* lx ly rx ry lt rt -> X Y RZ RY LT RT */
                 int k, a;
                 for (k = 0; k < 6; k++) xe_axes[map[k]] = k < 4 ? 128 : 0;

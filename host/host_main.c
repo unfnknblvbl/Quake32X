@@ -5,6 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "../src/r_local.h"
+#include "../src/levels.h"
+
+/* no shared sound bank in these views */
+const uint8_t *lvl_bank(void) { return NULL; }
 
 int32_t host_div_result;
 int st_reject, st_clipaway, st_occluded, st_vis, st_sphere;

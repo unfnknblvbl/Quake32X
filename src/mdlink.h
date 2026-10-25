@@ -27,7 +27,8 @@ void md_pump(void);                 /* feed queued words to the 68000 */
 void md_wait(void);                 /* until everything queued is sent */
 int  md_busy(void);                 /* words still queued */
 void md_pump_for(int n);            /* wait for the 68000 to take up to n words */
-void md_bank(int page);             /* map cartridge pages page .. page + 6 at 0x02080000 */
+void md_bank(int page);
+void md_bank_set(int page, int n);     /* the shared sound bank: n pages from page */             /* map cartridge pages page .. page + 6 at 0x02080000 */
 void md_sync(void);                 /* until the 68000 has carried out all sent so far */
 
 /* immediate mode: put everything that should be on screen each frame;
@@ -42,6 +43,10 @@ void md_end_back(void);
 
 /* the view weapons (tools/mkmd.py) */
 enum { MDW_AXE, MDW_SHOTGUN, MDW_SUPER_SHOTGUN, MDW_NAILGUN, MDW_GRENADE_LAUNCHER };
+
+/* the flat-shaded weapon renders (when the data has them) instead of the
+ * textured ones: set while textures are off */
+extern int md_gun_flat;
 
 /* the view weapon (MDW_*; frame -1 = none), shown from the next vertical
  * blank */

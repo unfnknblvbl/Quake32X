@@ -31,7 +31,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 deps() {
     [ "${SKIP_DEPS:-0}" = 1 ] && return
     command -v pacman >/dev/null || die "pacman not found: this script is for CachyOS / Arch (set SKIP_DEPS=1 to skip)"
-    local pkgs=(base-devel python python-numpy wget texinfo gmp mpfr libmpc)
+    local pkgs=(base-devel cmake wget texinfo gmp mpfr libmpc)
     local missing=()
     for p in "${pkgs[@]}"; do pacman -Q "$p" >/dev/null 2>&1 || missing+=("$p"); done
     if [ ${#missing[@]} -gt 0 ]; then
@@ -100,8 +100,7 @@ rom() {
         mkdir -p data && cp -f "$PAK" data/pak0.pak
     fi
     [ -f data/pak0.pak ] || die "put Quake's pak0.pak at data/pak0.pak (or run PAK=/path/to/pak0.pak ./build.sh)"
-    command -v python3 >/dev/null || die "python3 is needed"
-    python3 -c 'import numpy' 2>/dev/null || die "python numpy is needed (pacman -S python-numpy)"
+    command -v cmake >/dev/null || die "cmake is needed for the converters (pacman -S cmake)"
     say "building quake32x.32x $(cat VERSION)"
     make -j"$JOBS" TC="$TC_PREFIX/bin" ${FAST:+FAST=$FAST}
     say "done: $PWD/quake32x.32x"

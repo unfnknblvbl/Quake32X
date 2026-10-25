@@ -84,6 +84,13 @@ void md_bank(int page)
     put_word(0xC000 | (page & 0x3F));
 }
 
+/* the shared sound bank: n pages from page p, mapped after the level's own
+   by the next md_bank */
+void md_bank_set(int page, int n)
+{
+    put_word(0xD000 | ((n & 7) << 6) | (page & 0x3F));
+}
+
 /* until the 68000 has carried out everything sent so far: it takes the
    next word only when it is done with the one before, so once it has
    taken a final no-op, the rest is done */
@@ -185,6 +192,19 @@ void md_end_back(void)
 
 /* ------------------------------------------------------------ the weapon */
 
+int md_gun_flat;
+
+/* the weapon set for a weapon at a screen size: the flat-shaded sets, when
+   there are any, follow the textured ones */
+static int gun_set_of(int weapon, int size)
+{
+    int per = (int)rd32(md_data + 24) * (int)rd32(md_data + 28);   /* sizes x weapons */
+    int set = weapon * (int)rd32(md_data + 24) + size;
+    if (md_gun_flat && (int)rd32(md_data + 16) >= 2 * per)
+        set += per;
+    return set;
+}
+
 static const uint8_t *set_entry(int set)
 {
     if (set < 0 || set >= (int)rd32(md_data + 16))
@@ -194,7 +214,7 @@ static const uint8_t *set_entry(int set)
 
 void md_gun(int weapon, int size, int frame)
 {
-    int set = weapon * (int)rd32(md_data + 24) + size, w;
+    int set = gun_set_of(weapon, size), w;
     if (frame < 0) {
         w = 0xA0FF;
     } else {
@@ -213,7 +233,7 @@ void md_gun(int weapon, int size, int frame)
 
 int md_gun_cut(int weapon, int size, int frame, md_cut_t *cut)
 {
-    const uint8_t *e = set_entry(weapon * (int)rd32(md_data + 24) + size), *c;
+    const uint8_t *e = set_entry(gun_set_of(weapon, size)), *c;
     if (!e || frame < 0 || frame >= ((e[6] << 8) | e[7]))
         return 0;
     c = md_data + rd32(md_data + rd32(e + 16) + frame * 4);

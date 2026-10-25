@@ -7,7 +7,7 @@ secrets and sounds. A from-scratch engine runs on the 32X's two SH-2s, and
 the Mega Drive draws the text, the status bar border and the weapon in your
 hands.
 
-Version **0.6.0** (see [CHANGELOG.md](CHANGELOG.md)). Versions 0.x are works
+Version **0.7.0** (see [CHANGELOG.md](CHANGELOG.md)). Versions 0.x are works
 in progress; 1.0.0 will be the first public release.
 
 The technical side (how the renderer works, the cartridge layout,
@@ -61,6 +61,10 @@ default:
 The sticks also work the menus. Everything above can be changed in
 **Analogue pad...**.
 
+A pad adapter that turns an Xbox, PlayStation or other modern pad
+(Bluetooth or USB) into this pad, or into an ordinary 6-button pad, is a
+separate project.
+
 ## Menu
 
 START opens it over the demo or the game. Up/Down picks a line,
@@ -90,8 +94,11 @@ rate up.
 
 On the cycle model of the hardware (see docs/TECHNICAL.md), full screen:
 E1M1 runs at about 16 fps textured and 28 flat; E1M3, the heaviest level,
-at about 7 fps textured over the attract demo and 16 flat. The fastest
-setup is flat shading at 70-80% screen size.
+at about 7 fps textured over the attract demo and 16 flat. The game starts
+at 70% screen size, where E1M3's attract demo runs at about 12 fps
+textured. The fastest setup is flat shading at 70-80% screen size; the
+editor's tools go further (E1M3 flat with plain colours and hard shadows:
+18 fps at 70%).
 
 The cartridge has only been run in emulators (PicoDrive, and the project's
 own cycle model). It is 10 MB and uses Sega's standard bank-switching mapper
@@ -111,8 +118,8 @@ cp /path/to/quake/id1/pak0.pak data/
 ./build.sh
 ```
 
-`build.sh` installs what it needs with pacman (`base-devel python
-python-numpy wget texinfo gmp mpfr libmpc`, asking for sudo), builds the
+`build.sh` installs what it needs with pacman (`base-devel cmake wget
+texinfo gmp mpfr libmpc`, asking for sudo), builds the
 cross compilers the first time (binutils for `sh-elf` and `m68k-elf`, GCC 13
 for the SH-2, about 20-40 minutes, into `~/.local/share/q32x-toolchain`),
 then builds `quake32x.32x`. Later runs skip straight to the cartridge.
@@ -129,11 +136,31 @@ SKIP_DEPS=1 ./build.sh                 # don't run pacman
 
 ### Elsewhere
 
-With an `sh-elf` and `m68k-elf` toolchain already installed, Python 3 and
-numpy: `make TC=/path/to/toolchain/bin`. See docs/TECHNICAL.md.
+With an `sh-elf` and `m68k-elf` toolchain already installed, CMake and a
+C++20 compiler: `make TC=/path/to/toolchain/bin`. See docs/TECHNICAL.md.
+
+## The editor
+
+`editor/` is a level editor for the cartridge: TrenchBroom with a Quake 32X
+module. It converts Quake's maps, models and sounds, shows each level as
+the 32X draws it, and has the tools to make levels smaller and faster:
+door areas, light maps as polygons, reduced textures, colours by hand,
+geometry reduction, the sound bank, model trimming, and the Mega Drive's
+weapon sprites, border and font. It exports the levels and, with the game
+program it ships with, the cartridge. No SH-2 compiler is needed.
+
+```
+editor/build.sh              # asks: Linux, Windows or both
+editor/build.sh linux        # build/linux/quake32x-editor
+editor/build.sh windows      # build/windows (MinGW-w64, Qt from the AUR)
+editor/build.sh both --deps  # both, installing what is missing first
+```
+
+See [editor/q32x/README.md](editor/q32x/README.md).
 
 ## Legal
 
 Quake is id Software's. This project contains none of Quake's data: the
 build reads it from your own `pak0.pak`. A cartridge built from the
 shareware `pak0.pak` holds only shareware-episode data.
+

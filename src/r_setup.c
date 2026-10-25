@@ -57,6 +57,11 @@ int face_setup(rcpu_t *rc, frec_t *fr)
         fixed_t z = fixmul(fr->zmin, view.mipscale);    /* as seen at full size */
         if (view.mipbias) z >>= 1;
         mip = z < (96 << 16) ? 0 : z < (192 << 16) ? 1 : z < (384 << 16) ? 2 : 3;
+        {   /* a reduced texture (the editor's) has no finer levels */
+            int mm = lvl.textures[ti->tex].flags & 3;
+            if (mip < mm)
+                mip = mm;
+        }
         if (f->flags & FF_TURB)
             mip = 0;                    /* liquids: base texture only, as in Quake */
         else {
