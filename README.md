@@ -10,6 +10,11 @@ hands.
 Version **0.7.0** (see [CHANGELOG.md](CHANGELOG.md)). Versions 0.x are works
 in progress; 1.0.0 will be the first public release.
 
+> **Not yet tested on a real 32X.** Quake 32X has only been run in
+> emulators (PicoDrive) and in this project's own cycle model of the
+> hardware. The frame rates below are that model's estimates. It may not
+> run, or may run differently, on a real console and flash cart.
+
 The technical side (how the renderer works, the cartridge layout,
 performance figures, the tools) is in [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
@@ -101,7 +106,7 @@ editor's tools go further (E1M3 flat with plain colours and hard shadows:
 18 fps at 70%).
 
 The cartridge has only been run in emulators (PicoDrive, and the project's
-own cycle model). It is 10 MB and uses Sega's standard bank-switching mapper
+own cycle model). It is 9 MB (10 MB with `make PLAIN=1`) and uses Sega's standard bank-switching mapper
 (the *Super Street Fighter II* one), so real hardware needs a flash cart
 that provides that mapper for 32X games. That has not been tried yet.
 
