@@ -4,7 +4,7 @@ Versions are 0.x.y until the first public release, 1.0.0. The minor number
 goes up for new features, the last number for fixes. Versions before 0.5.0
 were tagged afterwards, on the commits listed.
 
-## 0.7.0 — 2026-10-22
+## 0.7.0 — 2026-10-26
 
 The level editor, and the game support for what it does to levels. Levels
 built without the editor's changes play exactly as in 0.6.0.
@@ -78,6 +78,11 @@ built without the editor's changes play exactly as in 0.6.0.
   plays many sounds, the frame rate is 2-3% lower with either and 4-5%
   with both. (4-bit IMA ADPCM was tried first: 44% lower.)
 - **Bodies teleport away silently,** still in their burst of particles.
+- **Status, stated plainly:** Quake 32X is a proof of concept. The README
+  lists what works and what does not (Shamblers, Chthon and E1M7's ending,
+  the rocket launcher, super nailgun and Pentagram, some of E1M4-E1M8's
+  scripting), and `build.sh` shows what each map is missing before you
+  choose (the converter's `maps` command reports it).
 - **The cycle model's palette** (`tools/sh2sim.c`): a long write to the
   32X palette now sets both colours, as the 16-bit bus does on the
   hardware (it set one, so the model showed colour shifts and palette

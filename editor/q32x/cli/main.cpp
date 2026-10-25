@@ -15,6 +15,7 @@
 #include "q32x/json.h"
 #include "q32x/level.h"
 #include "q32x/mdgfx.h"
+#include "q32x/movers.h"
 #include "q32x/project.h"
 #include "q32x/rom.h"
 
@@ -42,7 +43,8 @@ static const char *USAGE =
     "        flat mode in a palette of your own for a level (.pal .gpl .hex .act .lmp .png, or grey);\n"
     "        keys: vividness variety special_kinds neutral_surfaces levels occlusion reach rays up_bias ambient lights lightmaps highlight shade enabled\n"
     "  maps [--no-textures] [--palette file] [--sounds full|half|packed|both] [--template project.q32x] pak0.pak\n"
-    "        every map in the pak converted on its own: name, bytes (its sounds included) and title\n"
+    "        every map in the pak converted on its own: name, bytes (its sounds included), title, and\n"
+    "        what in it the game does not do yet\n"
     "  make-project [--no-textures] [--palette file] [--sounds full|half|packed|both] --template project.q32x\n"
     "        pak0.pak out.q32x map...\n"
     "        a project of these maps with the template's settings (its first level's edits for each)\n"
@@ -52,6 +54,39 @@ static const char *USAGE =
     "        auto-optimise every level (or one), saving the project\n"
     "  check project.q32x\n"
     "        the budgets and limits of a project's levels\n";
+
+// what a map has that the game does not do yet (the converter leaves it
+// out): monsters, weapons and items it has no code for, and the scripted
+// things that matter to playing it
+static std::string missing_in(const std::vector<Entity> &ents)
+{
+    static const std::vector<std::pair<std::string, std::string>> named = {
+        {"monster_boss", "Chthon (the boss)"}, {"event_lightning", "Chthon's lightning"},
+        {"monster_shambler", "Shamblers"}, {"monster_fish", "Rotfish"}, {"monster_tarbaby", "Spawn"},
+        {"monster_hell_knight", "Death Knights"}, {"monster_enforcer", "Enforcers"},
+        {"monster_shalrath", "Vores"}, {"monster_oldone", "Shub-Niggurath"},
+        {"weapon_rocketlauncher", "rocket launcher"}, {"weapon_supernailgun", "super nailgun"},
+        {"weapon_lightning", "thunderbolt"}, {"item_artifact_invulnerability", "Pentagram"},
+        {"item_sigil", "the rune"}, {"misc_fireball", "lava fireballs"}, {"trigger_relay", "relayed triggers"},
+        {"trigger_monsterjump", "monster jumps"}, {"air_bubbles", "bubbles"}};
+    auto known = [](const std::string &c) {
+        for (auto *v : {&CLASSES, &MOVER_CLASSES, &TRIGGER_CLASSES, &STATIC_CLASSES})
+            if (std::find(v->begin(), v->end(), c) != v->end()) return true;
+        return false;
+    };
+    std::set<std::string> have;
+    for (auto &e : ents) have.insert(e.classname());
+    std::vector<std::string> out;
+    for (auto &kv : named)
+        if (have.count(kv.first) && !known(kv.first)) out.push_back(kv.second);
+    for (auto &c : have)   // (anything else that plays a part)
+        if ((starts_with(c, "monster_") || starts_with(c, "weapon_") || starts_with(c, "item_")) && !known(c) &&
+            std::none_of(named.begin(), named.end(), [&](auto &kv) { return kv.first == c; }))
+            out.push_back(c);
+    std::string r;
+    for (auto &x : out) r += (r.empty() ? "" : ", ") + x;
+    return r;
+}
 
 // the build script's choices on a level's edits: no textures (flat shading
 // only, smaller), and flat mode in a palette of greys
@@ -252,8 +287,10 @@ static int run(std::vector<std::string> a)
             for (auto &n : names) {
                 std::string stem = n.substr(5, n.size() - 9), title;
                 try {
-                    for (auto &e : parse_entities(Bsp::parse(pak.get(n)).entities))
+                    std::vector<Entity> ents = parse_entities(Bsp::parse(pak.get(n)).entities);
+                    for (auto &e : ents)
                         if (e.classname() == "worldspawn") title = e.get("message");
+                    std::string missing = missing_in(ents);
                     for (auto &c : title)
                         if (c == '\n' || c == '\t') c = ' ';
                     LevelProject lp;
@@ -264,7 +301,7 @@ static int run(std::vector<std::string> a)
                     if (dm != demo_of.end()) lp.demo = dm->second;   // (with its attract demo, if it has one)
                     std::string lg;
                     Bytes b = t.build_level(lp, true, nullptr, &lg);
-                    std::printf("%s\t%zu\t%s\n", stem.c_str(), b.size(), title.c_str());
+                    std::printf("%s\t%zu\t%s\t%s\n", stem.c_str(), b.size(), title.c_str(), missing.c_str());
                 } catch (const std::exception &e) {
                     std::printf("%s\t-\t%s\n", stem.c_str(), e.what());
                 }

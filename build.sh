@@ -181,9 +181,9 @@ choose_maps() {
     [ "$textures" = 1 ] || opts+=(--no-textures)
     if [ "$grey" = 1 ]; then opts+=(--palette "$pal"); fi
     say "measuring the maps in data/pak0.pak (about a minute)"
-    local names=() sizes=() titles=() line n s t
-    while IFS=$'\t' read -r n s t; do
-        names+=("$n"); sizes+=("$s"); titles+=("$t")
+    local names=() sizes=() titles=() missing=() line n s t x
+    while IFS=$'\t' read -r n s t x; do
+        names+=("$n"); sizes+=("$s"); titles+=("$t"); missing+=("$x")
     done < <("$conv" maps "${opts[@]}" --template data/quake32x.q32x data/pak0.pak)
     [ ${#names[@]} -gt 0 ] || die "no maps found in data/pak0.pak"
     local budget=$(( (4 << 20) - (512 << 10) )) step=65536 i
@@ -195,8 +195,15 @@ choose_maps() {
             printf "  %-3s %-8s %8s   (cannot be converted: %s)\n" "" "${names[$i]}" "" "${titles[$i]}"
         else
             printf "  %-3s %-8s %6d KB  %s\n" "$((i + 1)))" "${names[$i]}" $(( $(blocks "${sizes[$i]}") >> 10 )) "${titles[$i]}"
+            if [ -n "${missing[$i]}" ]; then
+                local note="not in the game yet: ${missing[$i]}"
+                case "${missing[$i]}" in *Chthon*) note="$note (so it cannot be finished)" ;; esac
+                echo "$note" | fold -s -w 52 | sed 's/ *$//; s/^/                          /'
+            fi
         fi
     done
+    echo "  Quake 32X is a proof of concept: E1M1-E1M3 play as Quake's do, apart from what"
+    echo "  is listed; the other maps load, but without their missing monsters and events."
     echo "  Room for maps on a 4 MB cartridge: $((budget >> 10)) KB (sizes include each map's sounds;"
     echo "  maps that share sounds take a little less together)."
     local picked=() total want w ok

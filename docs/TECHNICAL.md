@@ -3,8 +3,12 @@
 A from-scratch Quake engine for a **stock 32X** (two 23 MHz SH-2s, 256 KB
 SDRAM), running the first three levels of Quake's shareware episode, E1M1
 (the Slipgate Complex), E1M2 (Castle of the Damned) and E1M3 (the
-Necropolis), converted from the shareware `pak0.pak`. They are in a 10 MB
-cartridge with Sega's standard ROM mapper (below).
+Necropolis), converted from the shareware `pak0.pak`. The usual build puts
+them in a 9 MB cartridge with Sega's standard ROM mapper; `build.sh` can
+instead fit chosen maps in 4 MB with no mapper (below). It is a proof of
+concept, not tested on real hardware: the README's **Status** lists what
+the game does not do yet (Shamblers, Chthon, the rocket launcher, super
+nailgun and Pentagram, and some of the later maps' scripting).
 
 As in Quake, the machine starts with a demo: Quake's own `demo1`, recorded
 in E1M3, plays as the attract mode at power-on. It starts again when it

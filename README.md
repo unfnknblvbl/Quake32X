@@ -1,14 +1,16 @@
 # Quake 32X
 
-Quake's first three levels on a stock Sega 32X: E1M1 (the Slipgate
-Complex), E1M2 (Castle of the Damned) and E1M3 (the Necropolis), playable
-from start to exit, with their monsters, weapons, items, doors, lifts,
-secrets and sounds. A from-scratch engine runs on the 32X's two SH-2s, and
+A proof of concept: Quake's first three levels on a stock Sega 32X, E1M1
+(the Slipgate Complex), E1M2 (Castle of the Damned) and E1M3 (the
+Necropolis), playable from start to exit with most of their monsters,
+weapons, items, doors, lifts, secrets and sounds (see **Status** below for
+what is missing). A from-scratch engine runs on the 32X's two SH-2s, and
 the Mega Drive draws the text, the status bar border and the weapon in your
 hands.
 
-Version **0.7.0** (see [CHANGELOG.md](CHANGELOG.md)). Versions 0.x are works
-in progress; 1.0.0 will be the first public release.
+Version **0.7.0** (see [CHANGELOG.md](CHANGELOG.md)). It shows that Quake
+can run on the 32X; it is not a complete port, and it is not being
+actively developed.
 
 > **Not yet tested on a real 32X.** Quake 32X has only been run in
 > emulators (PicoDrive) and in this project's own cycle model of the
@@ -17,6 +19,39 @@ in progress; 1.0.0 will be the first public release.
 
 The technical side (how the renderer works, the cartridge layout,
 performance figures, the tools) is in [docs/TECHNICAL.md](docs/TECHNICAL.md).
+
+## Status
+
+**What works** (in emulators and the cycle model):
+
+* E1M1, E1M2 and E1M3 from start to exit: their doors, lifts, buttons,
+  secrets, keys, teleporters, traps, liquids and sounds.
+* Monsters: Grunts, Rottweilers, Ogres, Knights, Fiends, Scrags and Zombies.
+* Weapons: axe, shotgun, double-barrelled shotgun, nailgun and grenade
+  launcher.
+* Items: health, ammunition, armour, keys, the Quad Damage, the Biosuit and
+  the Ring of Shadows.
+* Textured or flat-shaded drawing, the pause menu, the attract demo, the
+  demo bot (on E1M1), 6-button pads and the XE-1 AP analogue pad.
+* Cartridges of 4 MB with no mapper, or larger ones with Sega's mapper.
+
+**What does not work yet** (the converter leaves these out of the levels):
+
+* Shamblers (one in E1M3, many later), and every monster of the later
+  episodes (Rotfish, Spawn, Death Knights, Enforcers, Vores, Shub-Niggurath).
+* The rocket launcher, the super nailgun, the thunderbolt and the Pentagram
+  of Protection.
+* E1M4-E1M8 convert and load, but without their Shamblers, and E1M4-E1M7
+  without some of their scripting (relayed triggers, monster jumps, lava
+  fireballs, bubbles). **E1M7 cannot be finished:** Chthon, his lightning
+  machine and the rune are not in the game. The full game's final level is
+  not in the shareware pak and would need Shub-Niggurath's ending.
+* Deathmatch and co-op; saving; music (the 32X has no CD audio here).
+* The demo bot follows a route made for E1M1, from the start of the first
+  level on the cartridge, so it only plays properly when that is E1M1.
+* It has not been tested on real hardware (above).
+
+`build.sh` shows what is missing from each map before you choose.
 
 ## Playing
 
@@ -171,22 +206,11 @@ C++20 compiler: `make TC=/path/to/toolchain/bin`. See docs/TECHNICAL.md.
 
 ## The editor
 
-`editor/` is a level editor for the cartridge: TrenchBroom with a Quake 32X
-module. It converts Quake's maps, models and sounds, shows each level as
-the 32X draws it, and has the tools to make levels smaller and faster:
-door areas, light maps as polygons, reduced textures, colours by hand,
-geometry reduction, the sound bank, model trimming, and the Mega Drive's
-weapon sprites, border and font. It exports the levels and, with the game
-program it ships with, the cartridge. No SH-2 compiler is needed.
-
-```
-editor/build.sh              # asks: Linux, Windows or both
-editor/build.sh linux        # build/linux/quake32x-editor
-editor/build.sh windows      # build/windows (MinGW-w64, Qt from the AUR)
-editor/build.sh both --deps  # both, installing what is missing first
-```
-
-See [editor/q32x/README.md](editor/q32x/README.md).
+A level editor for the cartridge (TrenchBroom with a Quake 32X module, which
+shows each level as the 32X draws it and has the tools that make levels
+smaller and faster) is a separate project, not published yet. The
+converter it shares with the game is here, in `editor/q32x` (its library,
+command-line tool and tests), because the game's build uses it.
 
 ## Legal
 
