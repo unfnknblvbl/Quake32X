@@ -61,9 +61,9 @@ default:
 The sticks also work the menus. Everything above can be changed in
 **Analogue pad...**.
 
-A pad adapter that turns an Xbox, PlayStation or other modern pad
-(Bluetooth or USB) into this pad, or into an ordinary 6-button pad, is a
-separate project.
+DualAnalogueAdapter, a separate project, turns an Xbox, PlayStation or
+other modern pad (Bluetooth or USB) into this pad, or into an ordinary
+6-button pad.
 
 ## Menu
 
