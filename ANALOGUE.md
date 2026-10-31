@@ -5,7 +5,7 @@ Quake 32X reads controller port 1 in one of two ways:
 * an ordinary **3- or 6-button pad**, the usual way;
 * an **analogue pad** that speaks the protocol of Dempa / Micomsoft's
   **XE-1 AP**, the analogue pad Sega's own Mega Drive games used. Quake 32X
-  also reads **32X-HD's extension** of that protocol, which adds what a
+  also reads **Polyshroom's extension** of that protocol, which adds what a
   modern pad has and the XE-1 AP lacked: the right stick's up and down, and
   the two triggers read separately.
 
@@ -16,7 +16,7 @@ switched over: plug the pad in and the game finds it. The pause menu's
 **Analogue pad...** page shows what is in port 1 on its bottom line.
 
 > Like the rest of Quake 32X, this has only been tried in emulators
-> (PicoDrive, and 32X-HD's XE-1 AP emulation) and in the project's own
+> (PicoDrive, and Polyshroom's XE-1 AP emulation) and in the project's own
 > cycle model, not on a real console.
 
 ## What the sticks do
@@ -53,13 +53,13 @@ as they are.
 **DualAnalogueAdapter**, a separate project by the same author, is an
 adapter that turns an Xbox, PlayStation or other modern pad (Bluetooth or
 USB) into either an XE-1 AP with the extension or an ordinary 6-button pad,
-for any Mega Drive or Genesis game. Some emulators (32X-HD, for one) can
+for any Mega Drive or Genesis game. Some emulators (Polyshroom, for one) can
 also present a PC pad as an XE-1 AP.
 
 ## The protocol
 
 This is what the game expects on port 1, for anyone making their own pad,
-adapter or emulator support. It follows the XE-1 AP as 32X-HD's
+adapter or emulator support. It follows the XE-1 AP as Polyshroom's
 ANALOGUE-PAD document describes it.
 
 ### The lines

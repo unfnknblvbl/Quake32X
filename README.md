@@ -90,7 +90,7 @@ the screen for the first few seconds of play.
 ### Analogue pad (XE-1 AP)
 
 If port 1 holds Dempa / Micomsoft's XE-1 AP, or an emulator's version of it
-(32X-HD maps a PlayStation or Xbox pad to it), the sticks work too. By
+(Polyshroom maps a PlayStation or Xbox pad to it), the sticks work too. By
 default:
 
 | Input | Action |

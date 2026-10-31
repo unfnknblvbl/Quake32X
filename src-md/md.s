@@ -29,7 +29,7 @@
 |   1111 xxxx xxxx xxxx  nothing (the SH-2 sends one to know the rest is done)
 |
 | The pad: an ordinary 3/6-button pad, or the XE-1 AP analogue pad (with
-| 32X-HD's extension for a modern pad's right stick Y and triggers), tried
+| Polyshroom's extension for a modern pad's right stick Y and triggers), tried
 | when no ordinary pad answers. COMM12 holds the buttons in the SH-2's pad
 | format; for the analogue pad bit 13 is set, bits 14/15 are the left/right
 | trigger, the stick also sets the d-pad bits (for the menus), and COMM2

@@ -23,7 +23,7 @@ were tagged afterwards, on the commits listed.
   flat palette.
 - The cartridge header names its levels (e.g. "QUAKE 32X - START E1M1").
 - ANALOGUE.md: the analogue controls, and the XE-1 AP protocol (with
-  32X-HD's extension) the game reads.
+  Polyshroom's extension) the game reads.
 - Fixed: closed split doors showed their hidden edges through themselves
   (faces pressed against another solid face are left out).
 - Fixed: messages longer than the status line (START's episode signs)

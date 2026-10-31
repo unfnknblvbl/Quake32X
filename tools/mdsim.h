@@ -27,8 +27,8 @@ static int pad_th = 1, pad_count;
 static uint16_t md_pad;             /* SH-2 button bits, as sh2sim's -pad */
 static uint64_t md_clk;             /* 68000 clocks run */
 
-/* -xe1ap: port 1 holds an XE-1 AP analogue pad (with 32X-HD's extension
- * unless -xe1ap-noext), as described in 32X-HD's ANALOGUE-PAD document:
+/* -xe1ap: port 1 holds an XE-1 AP analogue pad (with Polyshroom's extension
+ * unless -xe1ap-noext), as described in Polyshroom's ANALOGUE-PAD document:
  * a falling edge of TH latches a report, sent 50 us later one nibble per
  * 20 us (10 us /ACK high with the new L/H, then 10 us /ACK low with the
  * nibble), 12 nibbles, or 20 when TH is still low after the twelfth. The

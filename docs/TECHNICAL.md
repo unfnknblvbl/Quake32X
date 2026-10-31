@@ -62,12 +62,12 @@ buttons as set, are shown at the bottom of the screen for the first few
 seconds.
 
 **Analogue pad (XE-1 AP).** If port 1 holds Dempa / Micomsoft's XE-1 AP, or
-the 32X-HD emulator's version of it made from a PlayStation or Xbox pad, the
+Polyshroom's version of it made from a PlayStation or Xbox pad, the
 game uses its sticks. They have their own page in the pause menu
 (**Analogue pad...**), separate from the regular controls. By default the
 left stick moves and strafes, the right stick turns and looks, the right
 trigger fires, the left trigger jumps and C changes weapon; the stick also
-works the menus. 32X-HD's extension of the protocol adds the right stick's
+works the menus. Polyshroom's extension of the protocol adds the right stick's
 up and down and the two triggers separately. Without it, the XE-1 AP's
 throttle gives the triggers (or, if set, looking up and down).
 
@@ -826,7 +826,7 @@ Drive data and the cartridge). The Python demo tools (`make_demo.py`,
   PicoDrive source tree, `MUSASHI=...`), the joypad port and the VDP's
   planes and sprites, mixed over the 32X picture as the 32X does it.
   `-xe1ap` (or `-xe1ap-noext`) puts an XE-1 AP in port 1, following
-  32X-HD's description of its timing, and `-analog FROM TO lx ly rx ry lt
+  Polyshroom's description of its timing, and `-analog FROM TO lx ly rx ry lt
   rt` sets its sticks and triggers between two vblanks.
 * `tools/mkmd.py`: the Mega Drive tiles, palettes, pre-rendered weapon
   sprites and their cutouts (`build/md_data.bin`, at ROM offset 0x30000 since 0.7.0);
