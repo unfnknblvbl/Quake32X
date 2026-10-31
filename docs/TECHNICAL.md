@@ -3,9 +3,10 @@
 A from-scratch Quake engine for a **stock 32X** (two 23 MHz SH-2s, 256 KB
 SDRAM), running the first three levels of Quake's shareware episode, E1M1
 (the Slipgate Complex), E1M2 (Castle of the Damned) and E1M3 (the
-Necropolis), converted from the shareware `pak0.pak`. The usual build puts
-them in a 9 MB cartridge with Sega's standard ROM mapper; `build.sh` can
-instead fit chosen maps in 4 MB with no mapper (below). It is a proof of
+Necropolis), converted from the shareware `pak0.pak`. Cartridges are 4 MB
+at most for now (no mapper), with every sound, texture and model stored
+once in a shared library; the usual build is START and E1M1 with half-size
+textures (below), and `build.sh` fits other choices of maps. It is a proof of
 concept, not tested on real hardware: the README's **Status** lists what
 the game does not do yet (Shamblers, Chthon, the rocket launcher, super
 nailgun and Pentagram, and some of the later maps' scripting).
@@ -125,7 +126,15 @@ rendering behind the menu, so every change shows up immediately.
 
 (The monster counts are Quake's normal skill.)
 
-The 32X sees at most 4 MB of cartridge, so the cartridge has Sega's standard
+(The blob sizes are from 0.6, textured with full sounds, each level with all
+it uses; on a 0.7.0 cartridge the library holds what they share.)
+
+**Cartridges are 4 MB at most for now**: the converter refuses more
+(`build_rom`: "more than 4096 KB"), and `build.sh` asks again. What
+follows about the mapper is how 0.6 and earlier fitted E1M1-E1M3; the
+game still has that code, but the converter no longer builds such
+cartridges, since the shared library (below) is only reachable in the
+4 MB layout. The 32X sees at most 4 MB of cartridge, so the cartridge had Sega's standard
 mapper (the one *Super Street Fighter II* introduced): the 4 MB window is
 eight 512 KB pages, the first fixed and the other seven set by registers at
 0xA130F3-0xA130FF that only the 68000 can write. Page 0 holds the program
@@ -142,18 +151,43 @@ PicoDrive turns the mapper on for any 32X ROM over 4 MB. On real hardware it
 needs a cartridge or flash cart that provides the mapper for a 32X game;
 that has not been tried.
 
-**Cartridges of 4 MB or less** (0.7.0; what `build.sh` makes from the maps
-you choose) need no mapper. The SH-2s see the whole cartridge, so the
-converter packs the sound bank and the levels after the program page at
-64 KB steps, sets bit 0 of the level directory's flags word, and writes the
-directory's page numbers and counts in 64 KB steps. The game then reads
-each level where it lies (0x02000000 + 64 KB x its first step) and never
-asks the 68000 to write the mapper registers. The cartridge is padded to 1,
-2 or 4 MB. `build.sh` lists every map in the pak with its size alone (its
-sounds included, so a little more than it takes beside maps that share
-sounds), and keeps asking until the choice fits in the 3.5 MB after the
-program page. Without textures a level loses its textures and light maps
-(`flat_only`); on the shareware maps that saves 10-25%.
+**Cartridges of 4 MB or less** (0.7.0) need no mapper. The SH-2s see the
+whole cartridge, so the converter packs the levels after the program page
+at 64 KB steps, then the **shared library**, sets bit 0 of the level
+directory's flags word, and writes the directory's page numbers and counts
+in 64 KB steps. The game reads each level where it lies (0x02000000 + 64 KB
+x its first step) and never asks the 68000 to write the mapper registers.
+The cartridge is padded to 1, 2 or 4 MB.
+
+The shared library holds everything the levels would otherwise each carry
+a copy of, each stored once (the same bytes, whatever level asks for them):
+every sound, every texture's texels, every model (and its distance
+version), and the tables every level has (the palette, colormap, console
+font, border tile, sky and the flat palette). A level refers to an entry by
+the same 32-bit field it would use for its own data: the texture records'
+mip offsets, the model table, the header's and the extension directory's
+lump offsets. The converter writes the entry's offset in the library there
+and lists the field; the cartridge builder adds the library's distance from
+the level (positive: the library lies after every level), so the game reads
+them as offsets from the level's start as ever and needs no change. Sounds
+use the sound bank's offset (bit 31 of a sound record), and the library is
+the bank (the directory's bank page). On START and E1M1 the library saves
+about 380 KB. A level converted on its own (the host build's, `level`)
+keeps everything in itself.
+
+`build.sh` lists every map in the pak with its size alone (with all its
+sounds, textures and models), then measures the chosen maps together
+(`q32x-convert size`: per map its own bytes, what it adds to the library
+and the running total) and keeps asking until they fit. Without textures a
+level loses its textures and light maps (`flat_only`); on the shareware
+maps that saves 10-25%. **Half-size textures** (`half_textures`) leave out
+each texture's finest level (a quarter of the texels; the renderer draws
+the next level instead, as the editor's reduced textures do), and **flat
+specials** (`flat_textures`: liquids, skies and stained glass) draw those
+faces in their flat colour with textures on too, so they need no texels:
+such a face has `FF_FLATTEX` (128), and its light-map offset holds its
+colours in Quake's palette (lit << 8 | unlit), the nearest of Quake's 256
+to its flat colour. START and E1M1 so fit in about 3.9 MB with both.
 
 Between levels, both CPUs stop between frames: the master stops the sounds,
 maps the next level, resets the renderer (the liquid textures are copied to
@@ -841,5 +875,4 @@ Drive data and the cartridge). The Python demo tools (`make_demo.py`,
   waiting for cartridge ROM and SDRAM writes, which assembly does not
   change: the three assembly stages together gave about 5%.
 * Hardware verification. Everything has been checked in PicoDrive (dynarec
-  and interpreter) and the cycle model, but not on a real 32X, nor with a
-  real cartridge that has the mapper.
+  and interpreter) and the cycle model, but not on a real 32X.

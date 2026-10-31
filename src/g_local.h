@@ -156,6 +156,7 @@ typedef struct {
     int16_t  secrets, total_secrets;
     const char *msg;
     uint32_t msg_until;
+    uint32_t msg_t0;                 /* when it came up (a message of several lines shows them in turn) */
 } pstate_t;
 
 enum { FLASH_DAMAGE, FLASH_BONUS };
@@ -267,6 +268,7 @@ int  vlen_units(const fixed_t a[3], const fixed_t b[3]);
 int  g_box_blocked(fixed_t x, fixed_t y, fixed_t z);
 int  g_shot_would_hit(const ent_t *e);
 int  g_hud_text(char *buf);
+void g_set_message(const char *m, uint32_t ticks);   /* on the status line for at least ticks */
 extern int g_level_done;
 extern uint32_t g_level_ticks;
 

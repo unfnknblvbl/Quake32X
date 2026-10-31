@@ -117,6 +117,9 @@ struct LevelEdits {
     // made from them), by texture name
     std::map<std::string, Bytes> texture_pixels;
     std::set<int> mover_models;              // mover indices drawn as models
+    // textures drawn in their flat colour even while textures are on (name
+    // globs; liquids, skies, stained glass): no texels stored for them
+    std::vector<std::string> flat_textures;
     // flat mode in a palette of the user's own (colours, rules and face
     // colours are then indices into it), shaded by occlusion and lights
     FlatPalOptions flatpal;

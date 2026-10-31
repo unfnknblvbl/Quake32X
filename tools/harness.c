@@ -206,6 +206,7 @@ int main(int argc, char **argv)
         if (!strcmp(c->op, "hold")) sscanf(line, "%*s %d %d %63s", &c->a, &c->b, c->s);
         else if (!strcmp(c->op, "shot")) sscanf(line, "%*s %d %63s", &c->a, c->s);
         else if (!strcmp(c->op, "peek")) sscanf(line, "%*s %d %x %d", &c->a, &c->addr, &c->b);
+        else if (!strcmp(c->op, "poke")) sscanf(line, "%*s %d %x %x", &c->a, &c->addr, (unsigned *)&c->b);
         else sscanf(line, "%*s %d", &c->a);
         if (!strcmp(c->op, "end")) endframe = c->a;
         ncmds++;
@@ -272,6 +273,11 @@ int main(int argc, char **argv)
                         if (ram) { printf("  mdram[0000..]:"); for (int k = 0x0000; k < 0x20; k += 2) printf(" %02x%02x", ram[k+1], ram[k]); }
                     }
                     printf("\n");
+                } else if (!strcmp(c->op, "poke")) {   /* a long into SDRAM (e.g. the player's position) */
+                    uint8_t *m = sdram();
+                    uint16_t hi = (uint16_t)((unsigned)c->b >> 16), lo = (uint16_t)c->b;
+                    unsigned a = c->addr & 0x3FFFC;
+                    if (m) { memcpy(m + a, &hi, 2); memcpy(m + a + 2, &lo, 2); }
                 } else if (!strcmp(c->op, "peek")) {
                     printf("frame %d %08x:", fr, c->addr);
                     for (int k = 0; k < c->b; k++) printf(" %08x", sdram_long(c->addr + k * 4));

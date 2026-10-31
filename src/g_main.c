@@ -17,7 +17,9 @@ int g_level_done;                    /* the exit was touched: intermission */
 static uint32_t part_until;          /* no particle lives past this tick */
 uint32_t g_teleports;                /* monsters teleported in so far (for demo captions) */
 uint32_t g_last_tele_cls;
-static int exit_rec = -1;            /* the trigger_changelevel record */
+#define MAX_EXITS 8
+static int exit_rec[MAX_EXITS];       /* the trigger_changelevel records (start has five) */
+static int nexits;
 uint32_t g_level_ticks;
 
 static const lmodel_t *models[MDL_NUM];
@@ -389,7 +391,7 @@ GCODE void g_init(void)
     mv_init();
     level_time = 1;
     part_until = 0;
-    exit_rec = -1;
+    nexits = 0;
     inter_rec = -1;
     g_level_done = 0;
     g_level_ticks = 0;
@@ -403,7 +405,7 @@ GCODE void g_init(void)
         spot[2] = FX(le->org[2]);
         qleaf[i] = r_pointleaf(spot);
         switch (c) {
-        case CL_T_CHANGELEVEL: exit_rec = i; break;
+        case CL_T_CHANGELEVEL: if (nexits < MAX_EXITS) exit_rec[nexits++] = i; break;
         case CL_INTERMISSION: if (inter_rec < 0) inter_rec = i; break;
         case CL_TELEPORT_DESTINATION: break;
         case CL_L_TORCH_SMALL_WALLTORCH:
@@ -654,10 +656,40 @@ GCODE void g_flash_decay(void)
     ps.bonus_flash = ps.bonus_flash > b ? ps.bonus_flash - b : 0;
 }
 
+/* the status line has one line of 40 columns: a message of several lines
+   (the start map's episode signs) shows its lines in turn, 1.5 s each */
+#define MSG_LINE_TICKS (TICKS(3) / 2)
+#define HUD_COLS 40
+
+static int msg_lines(const char *m)
+{
+    int n = 0, len = 0;
+    for (;; m++) {
+        if (*m == '\n' || !*m) {
+            if (len) n++;
+            len = 0;
+            if (!*m) break;
+        } else
+            len++;
+    }
+    return n;
+}
+
+GCODE void g_set_message(const char *m, uint32_t ticks)
+{
+    uint32_t t;
+    /* the same message again while it shows (a trigger stood in): carry on
+       through its lines rather than starting over */
+    if (ps.msg == m && level_time < ps.msg_until) return;
+    ps.msg = m;
+    ps.msg_t0 = level_time;
+    t = (uint32_t)msg_lines(m) * MSG_LINE_TICKS;
+    ps.msg_until = level_time + (t > ticks ? t : ticks);
+}
+
 static void message(const char *m)
 {
-    ps.msg = m;
-    ps.msg_until = level_time + TICKS(2);
+    g_set_message(m, TICKS(2));
 }
 
 /* items.qc's ammo_touch: if the player held his best weapon, he gets the
@@ -898,8 +930,9 @@ static void recall_check(ent_t *e)
 
 static void check_exit(void)
 {
-    if (exit_rec >= 0) {
-        const lent_t *l = &lents[exit_rec];
+    int k;
+    for (k = 0; k < nexits; k++) {
+        const lent_t *l = &lents[exit_rec[k]];
         int dx, dy, dz;
         dx = UNITS(player.pos[0]) - l->org[0];
         dy = UNITS(player.pos[1]) - l->org[1];
@@ -910,6 +943,7 @@ static void check_exit(void)
             g_level_ticks = level_time;
             ps.weaponframe = 0;
             snd_stop_dynamic();
+            return;
         }
     }
 }
@@ -1246,7 +1280,23 @@ GCODE int g_hud_text(char *buf)
         return 1;
     }
     if (ps.msg && level_time < ps.msg_until) {
-        put_str(p, ps.msg)[0] = 0;
+        /* this moment's line (empty lines skipped), cut to the bar's width */
+        const char *m = ps.msg;
+        int n = msg_lines(m), k = 0, want, col = 0;
+        want = n > 1 ? (int)((level_time - ps.msg_t0) / MSG_LINE_TICKS) : 0;
+        if (want >= n) want = n - 1;
+        for (; *m; m++) {
+            if (*m == '\n') {
+                if (col) k++;
+                col = 0;
+                continue;
+            }
+            if (k == want && col < HUD_COLS)
+                *p++ = *m;
+            col++;
+            if (k > want) break;
+        }
+        *p = 0;
         return 0;
     }
     /* labels in the console font's gold set, numbers in white: fits in

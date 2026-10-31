@@ -331,7 +331,7 @@ static int light_rec(int num, const fixed_t start[3], const fixed_t end[3])
         dt = (t >> 16) - f->tmins[1];
         if (ds < 0 || dt < 0 || ds > f->ext[0] || dt > f->ext[1])
             continue;
-        if (f->lightofs < 0)
+        if (f->lightofs < 0 || (f->flags & FF_FLATTEX))
             return 128;
         return lvl.light[f->lightofs + (dt >> 4) * ((f->ext[0] >> 4) + 1) + (ds >> 4)];
     }

@@ -6,61 +6,34 @@
   "rom_name": "quake32x",
   "levels": [
     {
+      "name": "start",
+      "bsp": "maps/start.bsp",
+      "flat_tol": 4,
+      "edits": {
+        "light_to_polygons": {
+          "enabled": false,
+          "bands": 2,
+          "min_area": 512,
+          "max_pieces": 12,
+          "budget": 0,
+          "contrast": 1
+        },
+        "reduce": {
+          "merge_textured": true,
+          "max_ext": 256,
+          "min_area": 0,
+          "fix_tjunctions": true
+        },
+        "vertex_order": true,
+        "flat_only": false,
+        "light_grid": 0,
+        "doors_block": true,
+        "simple_collision": true
+      }
+    },
+    {
       "name": "e1m1",
       "bsp": "maps/e1m1.bsp",
-      "flat_tol": 4,
-      "edits": {
-        "light_to_polygons": {
-          "enabled": false,
-          "bands": 2,
-          "min_area": 512,
-          "max_pieces": 12,
-          "budget": 0,
-          "contrast": 1
-        },
-        "reduce": {
-          "merge_textured": true,
-          "max_ext": 256,
-          "min_area": 0,
-          "fix_tjunctions": true
-        },
-        "vertex_order": true,
-        "flat_only": false,
-        "light_grid": 0,
-        "doors_block": true,
-        "simple_collision": true
-      }
-    },
-    {
-      "name": "e1m2",
-      "bsp": "maps/e1m2.bsp",
-      "flat_tol": 4,
-      "edits": {
-        "light_to_polygons": {
-          "enabled": false,
-          "bands": 2,
-          "min_area": 512,
-          "max_pieces": 12,
-          "budget": 0,
-          "contrast": 1
-        },
-        "reduce": {
-          "merge_textured": true,
-          "max_ext": 256,
-          "min_area": 0,
-          "fix_tjunctions": true
-        },
-        "vertex_order": true,
-        "flat_only": false,
-        "light_grid": 0,
-        "doors_block": true,
-        "simple_collision": true
-      }
-    },
-    {
-      "name": "e1m3",
-      "bsp": "maps/e1m3.bsp",
-      "demo": "demo1.dem",
       "flat_tol": 4,
       "edits": {
         "light_to_polygons": {
@@ -88,10 +61,27 @@
   "texture_rules": [],
   "shared_bank": true,
   "mega_drive": {
-    "weapon_size": [0, 2, 2, 3, 4, 5],
+    "weapon_size": [
+      0,
+      2,
+      2,
+      3,
+      4,
+      5
+    ],
     "compress": true,
     "flat_weapons": true,
     "light_scale": 1.3,
     "dither": 0.6
-  }
+  },
+  "half_textures": true,
+  "flat_textures": [
+    "*water*",
+    "*slime*",
+    "*lava*",
+    "*teleport*",
+    "sky*",
+    "window*"
+  ],
+  "sound_format": 2
 }

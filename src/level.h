@@ -83,6 +83,9 @@ typedef struct {
 #define FF_LIQUID   16                   /* water, slime, lava (not teleporters) */
 #define FF_UNDERWATER 32                 /* only visible from inside a liquid */
 #define FF_KEEPTEX  64                   /* textured in flat-shaded mode too: switches, exits */
+#define FF_FLATTEX 128                   /* flat with textures on too (liquids, sky, glass): no
+                                            texels; lightofs holds its colours in Quake's palette
+                                            (lit << 8 | unlit) */
 
 typedef struct {
     uint16_t firstvert;

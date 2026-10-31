@@ -71,8 +71,7 @@ static void show_message(const char *m)
 {
     if (!m)
         return;
-    ps.msg = m;
-    ps.msg_until = level_time + TICKS(3);
+    g_set_message(m, TICKS(3));
     snd_start(SND_TALK, NULL, 255);
 }
 
@@ -663,8 +662,7 @@ GCODE void mv_touch_player(void)
             } else if (level_time >= ms[lead].touch_finished) {
                 fixed_t c[3];
                 ms[lead].touch_finished = level_time + TICKS(2);
-                ps.msg = key == IT_KEY2 ? "You need the gold key" : "You need the silver key";
-                ps.msg_until = level_time + TICKS(2);
+                g_set_message(key == IT_KEY2 ? "You need the gold key" : "You need the silver key", TICKS(2));
                 center(i, c);
                 snd_start(lvl.hdr->worldtype == 1 ? SND_RUNETRY : lvl.hdr->worldtype == 2 ? SND_BASETRY
                           : SND_MEDTRY, c, 255);

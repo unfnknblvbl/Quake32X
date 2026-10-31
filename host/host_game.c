@@ -257,11 +257,20 @@ int main(int argc, char **argv)
         if (getenv("MLOG") && fr % atoi(getenv("MLOG")) == 0)
             for (k = 0; k < MAX_ENTS; k++) {
                 const ent_t *e = &ents[k];
-                if (e->type == ET_FREE || e->type == ET_ITEM) continue;
+                if (e->type == ET_FREE || (e->type == ET_ITEM && !getenv("ILOG"))) continue;
                 printf("   ent %d type %d cls %d q %d pos %d %d %d hp %d frame %d hunt %d ground %d yaw %d ideal %d\n", k, e->type, e->cls,
                        e->queue, UNITS(e->org[0]), UNITS(e->org[1]), UNITS(e->org[2]), e->health, e->frame, e->hunting,
                        e->onground, e->yaw * 360 / 65536, e->ideal_yaw * 360 / 65536);
             }
+        if (getenv("PLOG") && fr % atoi(getenv("PLOG")) == 0)   /* where the player is */
+            printf("frame %d player %d %d %d\n", fr, UNITS(player.pos[0]), UNITS(player.pos[1]), UNITS(player.pos[2]));
+        if (getenv("HUD")) {        /* the status line whenever it changes */
+            static char last[64];
+            char hb[48];
+            g_hud_text(hb);
+            if (strcmp(hb, last)) { printf("frame %d hud: %s\n", fr, hb); strcpy(last, hb); }
+            { static int said; if (g_level_done && !said) { printf("frame %d level done\n", fr); said = 1; } }
+        }
         if (vid) put_rgb(vid);
         if (shotdir && every && fr % every == 0) {
             char name[256];

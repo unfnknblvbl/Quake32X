@@ -30,6 +30,9 @@ std::vector<BspClipnode> rebuild_hull(const Bsp &bsp, int hull, int &head, Colli
 // both clip hulls of the world rebuilt in place (submodels keep theirs); the
 // clip node list is compacted and every model's head renumbered
 std::vector<CollisionStats> simplify_collision(Bsp &bsp);
+// solid brush models that never move (func_wall, func_bossgate) joined to
+// the world's clip hulls 1 and 2 (level.cpp); returns how many
+int merge_static_hulls(Bsp &bsp);
 
 // the contents of point p in clip hull with head `head` (for checks)
 int hull_contents(const Bsp &bsp, const std::vector<BspClipnode> &nodes, int head, const Vec3 &p);

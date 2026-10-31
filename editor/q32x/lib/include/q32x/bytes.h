@@ -191,6 +191,29 @@ struct Reader {
 };
 
 Bytes read_file(const std::string &path);
+
+// the cartridge's shared library: textures, models and the sound bank, each
+// stored once however many levels use them. A level refers to an entry by a
+// 32-bit field that holds the entry's offset in the library; the cartridge
+// builder makes it an offset from the level's own start (the library lies
+// after every level in the 4 MB layout, so it stays positive).
+struct SharedLib {
+    Bytes data;                              // big-endian, like the level blobs
+    std::vector<std::pair<std::string, uint32_t>> index;   // contents -> offset
+    size_t saved = 0;                        // bytes the sharing saved
+    // the entry's offset (4-aligned); the same bytes again give the same entry
+    uint32_t add(const Bytes &b, size_t align = 4)
+    {
+        std::string key(b.begin(), b.end());
+        for (auto &kv : index)
+            if (kv.first == key && kv.second % align == 0) { saved += b.size(); return kv.second; }
+        while (data.size() % align) data.push_back(0);
+        uint32_t o = uint32_t(data.size());
+        data.insert(data.end(), b.begin(), b.end());
+        index.push_back({std::move(key), o});
+        return o;
+    }
+};
 void write_file(const std::string &path, const Bytes &b);
 
 }  // namespace q32x

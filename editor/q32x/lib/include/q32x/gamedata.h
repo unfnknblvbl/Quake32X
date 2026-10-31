@@ -115,6 +115,10 @@ struct GameDataOptions {
     std::map<std::string, ModelLod> lods;         // by model name
     std::set<std::string> drop_sounds;            // sounds left out entirely
     int sound_format = 0;                         // SF_HALF | SF_PACK for every sound
+    // the cartridge's shared library (null: everything in the level itself):
+    // models go in it, and the fields that refer to them are listed in relocs
+    SharedLib *lib = nullptr;
+    std::vector<uint32_t> *relocs = nullptr;
 };
 
 // what a level can use: model names and sound names

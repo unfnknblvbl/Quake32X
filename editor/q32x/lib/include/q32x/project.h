@@ -95,6 +95,12 @@ public:
     std::map<std::string, SoundProject> sounds;
     bool shared_bank = false;
     int sound_format = 0;      // every sound: SF_HALF (5.5 kHz) | SF_PACK (4-bit), gamedata.h
+    // every texture without a rule of its own at half size (its finest level
+    // left out: a quarter of the texels), liquids and skies apart
+    bool half_textures = false;
+    // textures drawn in their flat colour with textures on too (globs): no
+    // texels stored (LevelEdits::flat_textures)
+    std::vector<std::string> flat_textures;
     std::map<std::string, ModelProject> models;
     MdGfxOptions md;
 

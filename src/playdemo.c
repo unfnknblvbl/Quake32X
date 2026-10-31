@@ -230,8 +230,7 @@ static int read_frame(void)
             g_flash(FLASH_BONUS, 50);
             break;
         case 10:
-            ps.msg = (const char *)demo + hdr->strings_ofs + (((p[0] << 8) | p[1]));
-            ps.msg_until = level_time + TICKS(2);
+            g_set_message((const char *)demo + hdr->strings_ofs + (((p[0] << 8) | p[1])), TICKS(2));
             p += 2;
             break;
         case 11: {

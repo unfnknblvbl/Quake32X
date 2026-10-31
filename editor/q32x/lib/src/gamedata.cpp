@@ -886,7 +886,9 @@ static std::map<std::string, Lump> add_movers(Buf &blob, const std::vector<Entit
     // messages: a table of offsets (from the blob start), then the text
     size_t base = blob.add(Bytes(4 * msgs.size(), 0));
     std::vector<size_t> offs;
-    for (auto &t : msgs) {
+    for (auto &t0 : msgs) {
+        // (Quake's maps write a line break as \n, which QuakeC turns into one)
+        std::string t = replace_all(t0, "\\n", "\n");
         Bytes b(t.begin(), t.end());
         b.push_back(0);
         offs.push_back(blob.add(b));
@@ -926,9 +928,15 @@ std::map<std::string, Lump> add_game_data(Buf &blob, const Pak &pak, const Palet
         }
         auto it = opt.models.find(mn.name);
         Bytes b = build_model(it != opt.models.end() ? it->second : load_model(pak, mn.name, pal), big);
+        msize += b.size();
+        if (opt.lib) {
+            // in the shared library: the cartridge builder makes it the level's offset
+            offs.push_back(opt.lib->add(b));
+            opt.relocs->push_back(uint32_t(base + 4 * (offs.size() - 1)));
+            continue;
+        }
         blob.align(4);
         offs.push_back(blob.add(b));
-        msize += b.size();
     }
     for (size_t i = 0; i < offs.size(); i++) blob.put_at(base + 4 * i, offs[i], 4);
     out["models"] = {base, MODELS.size()};
@@ -949,16 +957,23 @@ std::map<std::string, Lump> add_game_data(Buf &blob, const Pak &pak, const Palet
                 continue;
             }
             Bytes b = build_model(it->second.model, big);
+            msize += b.size();
+            if (opt.lib) {
+                lods.push_back({opt.lib->add(b), -1 - it->second.dist});   // (dist < 0: in the library)
+                continue;
+            }
             blob.align(4);
             lods.push_back({blob.add(b), it->second.dist});
-            msize += b.size();
         }
         for (auto &l : lods) {
             lt.u32(int64_t(l.first));
-            lt.u16(std::clamp(l.second, 0, 65535));
+            lt.u16(std::clamp(l.second < 0 ? -1 - l.second : l.second, 0, 65535));
             lt.u16(0);
         }
-        out["x:mdllod"] = {blob.add(lt), MODELS.size()};
+        size_t lofs = blob.add(lt);
+        for (size_t i = 0; i < lods.size(); i++)
+            if (lods[i].second < 0) opt.relocs->push_back(uint32_t(lofs + 8 * i));
+        out["x:mdllod"] = {lofs, MODELS.size()};
     }
 
     base = blob.add(Bytes(12 * SOUNDS.size(), 0));
@@ -984,8 +999,15 @@ std::map<std::string, Lump> add_game_data(Buf &blob, const Pak &pak, const Palet
         auto eit = opt.sound_edits.find(s);
         if (eit != opt.sound_edits.end() && !eit->second.plain()) snd = apply_sound_edit(snd, eit->second);
         Bytes stored = encode_sound(snd, opt.sound_format);
-        size_t o = blob.add(stored);
         ssize += stored.size();
+        if (opt.lib) {
+            // in the shared library, which the game reads as its sound bank
+            ent.u32(int64_t(0x80000000u | opt.lib->add(stored)));
+            ent.u32(int64_t(sound_length_field(snd, opt.sound_format)));
+            ent.i32(snd.loop);
+            continue;
+        }
+        size_t o = blob.add(stored);
         ent.u32(int64_t(o));
         ent.u32(int64_t(sound_length_field(snd, opt.sound_format)));
         ent.i32(snd.loop);

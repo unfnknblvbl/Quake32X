@@ -56,7 +56,7 @@ bool LevelEdits::empty() const
 {
     return faces.empty() && remaps.empty() && colour_rules.empty() && !light.enabled && !reduce.merge_textured && reduce.min_area <= 0 &&
            !vertex_order && !flat_only && light_grid <= 0 && !doors_block && !simple_collision && areas.empty() && textures.empty() &&
-           mover_models.empty() && texture_pixels.empty() &&
+           mover_models.empty() && texture_pixels.empty() && flat_textures.empty() &&
            !flatpal.enabled;
 }
 
@@ -183,12 +183,91 @@ using VKey = std::array<int, 3>;
 
 }  // namespace
 
+// Solid brush models that never move (func_wall, and func_bossgate, which
+// stays while the player has not every rune) are drawn with the world; for
+// the player and monsters to stand on them and bump into them, their clip
+// hulls (1 and 2) are joined to the world's: every empty leaf of the world's
+// hull near the model takes a copy of the model's hull, so a point is solid
+// where either is. (Shots and missiles, which trace hull 0, still pass.)
+int merge_static_hulls(Bsp &m)
+{
+    int n = 0;
+    for (auto &e : parse_entities(m.entities)) {
+        std::string cls = e.classname(), mdl = e.get("model");
+        if ((cls != "func_wall" && cls != "func_bossgate") || !starts_with(mdl, "*") || !present(e)) continue;
+        int mi = std::atoi(mdl.c_str() + 1);
+        if (mi <= 0 || mi >= int(m.models.size())) continue;
+        const BspModel &mo = m.models[size_t(mi)];
+        // (a level whose clip hulls would grow past their limit keeps the
+        // model apart: drawn, but not solid)
+        std::vector<BspClipnode> saved = m.clipnodes;
+        for (int h = 1; h <= 2; h++) {
+            int mh = mo.headnode[h];
+            if (mh < 0) continue;
+            // the model's hull, copied in for each leaf it reaches
+            std::function<int(int)> copy = [&](int c) -> int {
+                if (c < 0) return c;
+                BspClipnode cn = m.clipnodes.at(size_t(c));
+                int idx = int(m.clipnodes.size());
+                m.clipnodes.push_back(cn);
+                int a = copy(cn.child[0]), b = copy(cn.child[1]);
+                m.clipnodes[size_t(idx)].child[0] = a;
+                m.clipnodes[size_t(idx)].child[1] = b;
+                return idx;
+            };
+            const double pad = 72;   // (the hulls are the model's grown by the player's or a monster's size)
+            double lo[3], hi[3];
+            for (int k = 0; k < 3; k++) {
+                lo[k] = mo.mins[k] - pad;
+                hi[k] = mo.maxs[k] + pad;
+            }
+            const size_t original = m.clipnodes.size();
+            int shared = 0;   // one copy for every leaf (the hull is then a graph, which a trace walks the same)
+            bool copied = false;
+            std::function<void(int, std::array<double, 6>)> walk = [&](int node, std::array<double, 6> bb) {
+                const BspClipnode cn = m.clipnodes.at(size_t(node));
+                const BspPlane &pl = m.planes.at(size_t(cn.plane));
+                for (int side = 0; side < 2; side++) {
+                    std::array<double, 6> cb = bb;
+                    if (pl.type < 3) {   // an axial plane narrows the bounds
+                        if (side == 0) cb[size_t(pl.type)] = std::max(cb[size_t(pl.type)], pl.d);
+                        else cb[size_t(3 + pl.type)] = std::min(cb[size_t(3 + pl.type)], pl.d);
+                    }
+                    bool near = true;
+                    for (int k = 0; k < 3; k++)
+                        if (cb[size_t(k)] > hi[k] || cb[size_t(3 + k)] < lo[k]) near = false;
+                    if (!near) continue;
+                    int c = cn.child[side];
+                    if (c >= 0) {
+                        if (size_t(c) < original) walk(c, cb);
+                    } else if (c == CONTENTS_EMPTY) {
+                        if (!copied) {
+                            shared = copy(mh);
+                            copied = true;
+                        }
+                        m.clipnodes[size_t(node)].child[side] = shared;
+                    }
+                }
+            };
+            int wh = m.models[0].headnode[h];
+            if (wh >= 0) walk(wh, {-1e9, -1e9, -1e9, 1e9, 1e9, 1e9});
+        }
+        if (m.clipnodes.size() >= 32767) {
+            m.clipnodes = std::move(saved);
+            continue;
+        }
+        n++;
+    }
+    return n;
+}
+
 Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOptions &opt, LevelInfo *info,
                   std::string *log)
 {
     const bool big = opt.big_endian;
     const LevelEdits &E = opt.edits;
     Bsp m = Bsp::parse(opt.bsp_data ? *opt.bsp_data : pak.get(bsp_name));
+    int merged_static = merge_static_hulls(m);
     std::vector<CollisionStats> collision;
     if (E.simple_collision) collision = simplify_collision(m);
     Palette pal = Palette::from(pak.get("gfx/palette.lmp"));
@@ -214,6 +293,7 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
         warnings.push_back(s);
         say("warning: " + s);
     };
+    if (merged_static) say("solid walls joined to the world's collision: " + std::to_string(merged_static));
     for (auto &c : collision) {
         char buf[200];
         std::snprintf(buf, sizeof buf, "collision hull %d: %d -> %d nodes, %.1f -> %.1f tests a point (worst %d -> %d)%s",
@@ -320,11 +400,17 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
     std::optional<FlatShader> shader;
     if (USH) shader.emplace(m, ents, FP);
 
+    auto always_flat = [&](const std::string &name) {
+        for (auto &g : E.flat_textures)
+            if (colour_glob(lower(g), lower(name))) return true;
+        return false;
+    };
     auto tex_flags = [&](int ti) {
         const auto &t = textures.at(size_t(texinfo.at(size_t(ti)).miptex));
         std::string name = t ? t->name : "";
         int fl = 0;
         if (keep_textured(name)) fl |= 64;   // drawn textured in flat-shaded mode too
+        else if (always_flat(name)) fl |= 128;   // drawn flat with textures on too
         if (starts_with(name, "sky")) fl |= 2;
         if (starts_with(name, "*")) {
             fl |= 4;
@@ -546,6 +632,18 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
         int row, avgc, lit, unlit;
         bool exact;
         face_colours(fi, flags, avgL, row, avgc, lit, unlit, exact, false);
+        if (flags & 128) {
+            // flat with textures on too: its colour in Quake's palette (the one
+            // textured mode shows) in place of the light map's offset
+            int q = avgc;
+            // (liquids and skies are drawn unshaded: Quake's full-bright colours too)
+            if (UP)
+                q = pal.nearest(FP.rgb[size_t(3 * avgc)], FP.rgb[size_t(3 * avgc + 1)], FP.rgb[size_t(3 * avgc + 2)],
+                                (flags & 6) ? 256 : 224);
+            int qlit = exact ? q : fcm(false, row, q), qunlit = exact ? q : fcm(false, 32, q);
+            if (flags & 2) qlit = qunlit;
+            lofs = qlit << 8 | qunlit;
+        }
         // remove collinear duplicates in quantized space
         std::vector<int> vl;
         bool removed = plan && plan->remove;
@@ -993,8 +1091,99 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
     std::map<int, std::vector<int>> leaf_frags;
     int nfrag = 0;
     std::map<int, int> per_mover;
+
+    // faces pressed against another solid face (the teeth where a split
+    // door's halves meet, a door's edges against its frame, a lift's sides
+    // against the shaft) can never be seen; drawn, they show through the
+    // door in front of them (the renderer does not order the fragments of
+    // one leaf), so they are left out. Against: the world's faces, the
+    // static brush models, and the movers that move with this one, at the
+    // same keyframe.
+    struct Solid {
+        Vec3 n;
+        double d;
+        Poly poly;
+    };
+    auto face_solid = [&](int fi, const Vec3 &off) {
+        const BspFace &f = bspfaces.at(size_t(fi));
+        const BspPlane &pl = planes.at(size_t(f.plane));
+        Solid sd;
+        sd.n = f.side ? Vec3{-pl.n[0], -pl.n[1], -pl.n[2]} : Vec3{pl.n[0], pl.n[1], pl.n[2]};
+        sd.poly = m.face_polygon(f);
+        for (auto &p : sd.poly) p = add3(p, off);
+        sd.d = dot(sd.n, sd.poly.at(0));
+        return sd;
+    };
+    auto covered = [&](const Solid &a, const std::vector<Solid> &against) {
+        for (auto &b : against) {
+            if (dot(a.n, b.n) > -0.999 || std::fabs(a.d + b.d) > 0.5) continue;
+            // a's corners all within b (b's edges, with half a unit to spare)
+            bool all = true;
+            Vec3 c = winding_centre(b.poly);
+            for (auto &p : a.poly) {
+                for (size_t i = 0; i < b.poly.size() && all; i++) {
+                    const Vec3 &u = b.poly[i], &v = b.poly[(i + 1) % b.poly.size()];
+                    Vec3 en = normalize(cross(sub(v, u), b.n));
+                    if (dot(en, sub(c, u)) > 0) en = scale3(en, -1);   // (outwards, whichever way b winds)
+                    if (dot(en, sub(p, u)) > 0.5) all = false;
+                }
+                if (!all) break;
+            }
+            if (all) return true;
+        }
+        return false;
+    };
+    std::vector<Solid> world_solids;
+    for (int fi = 0; fi < models[0].numfaces; fi++) {
+        int fl = tex_flags(bspfaces[size_t(fi)].texinfo);
+        if (fl & 6) continue;   // (not liquids or sky)
+        world_solids.push_back(face_solid(fi, {0.0, 0.0, 0.0}));
+    }
+    auto model_solids = [&](int mi, const Vec3 &off) {
+        std::vector<Solid> out;
+        const BspModel &mo = models.at(size_t(mi));
+        for (int fi = mo.firstface; fi < mo.firstface + mo.numfaces; fi++) {
+            const BspTexture *tex = m.face_texture(bspfaces.at(size_t(fi)));
+            if (!tex || tex->name == "trigger" || tex->name == "clip") continue;
+            out.push_back(face_solid(fi, off));
+        }
+        return out;
+    };
+    std::vector<Solid> static_solids;
+    for (auto &g : groups)
+        if (g.mover < 0) {
+            auto ss = model_solids(g.model, g.off);
+            static_solids.insert(static_solids.end(), ss.begin(), ss.end());
+        }
+    int hidden_faces = 0;
     for (auto &g : groups) {
+        std::set<int> hidden;
+        {
+            std::vector<Solid> against = static_solids;
+            for (auto &h : groups) {
+                if (&h == &g || h.mover < 0 || g.mover < 0) continue;
+                const Mover &a = movers[size_t(g.mover)], &b = movers[size_t(h.mover)];
+                bool together = h.mover != g.mover && a.group >= 0 && a.group == b.group && h.key == g.key;
+                if (together) {
+                    auto ss = model_solids(h.model, h.off);
+                    against.insert(against.end(), ss.begin(), ss.end());
+                }
+            }
+            if (g.mover < 0) against.clear();   // (static models: against the world only)
+            const BspModel &mo = models.at(size_t(g.model));
+            for (int fi = mo.firstface; fi < mo.firstface + mo.numfaces; fi++) {
+                Solid a = face_solid(fi, g.off);
+                if (covered(a, world_solids) || covered(a, against)) hidden.insert(fi);
+            }
+        }
+        hidden_faces += int(hidden.size());
+        if (std::getenv("Q32X_DEBUG_HIDDEN") && g.mover >= 0) {
+            std::string l = "  mover " + std::to_string(g.mover) + " key " + std::to_string(g.key) + " *" + std::to_string(g.model) + " hidden:";
+            for (int h : hidden) l += " " + std::to_string(h);
+            say(l);
+        }
         for (auto &fr : clip_model(g.model, g.off)) {
+            if (hidden.count(fr.fi)) continue;
             const FaceEdit *e = fedit(fr.fi);
             if (e && e->remove) continue;
             int idx = add_face(fr.fi, fr.poly, fr.pts0, fr.side, false, g.mover, g.key, nullptr);
@@ -1009,7 +1198,8 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
             }
         }
     }
-    say("bmodel fragments: " + std::to_string(nfrag));
+    say("bmodel fragments: " + std::to_string(nfrag) + " (faces pressed against others left out: " +
+        std::to_string(hidden_faces) + ")");
     check(face_recs.size() <= size_t(MAX_LEVEL_FACES), "more faces than MAX_MAP_FACES in src/r_local.h");
     {
         std::vector<std::pair<int, int>> pm(per_mover.begin(), per_mover.end());
@@ -1859,12 +2049,16 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
     size_t texture_bytes = 0;
     {   // textures: (w, h, avg, flags, pad, mipofs[4]) = 24 bytes, then the mips
         std::vector<bool> tex_used(textures.size(), !E.flat_only);
+        for (size_t i = 0; i < textures.size(); i++)
+            if (textures[i] && !keep_textured(textures[i]->name) && always_flat(textures[i]->name)) tex_used[i] = false;
         if (E.flat_only)
             for (auto &r : face_recs)
                 if ((r.flags & 64) && !r.vl.empty())
                     tex_used[size_t(out_texinfo[size_t(r.texinfo)].miptex)] = true;
         Bytes texdata;
         Buf table(big);
+        SharedLib *lib = opt.game.lib;
+        std::vector<bool> in_lib(textures.size(), false);
         for (size_t i = 0; i < textures.size(); i++) {
             const auto &t = textures[i];
             if (!t) {
@@ -1873,6 +2067,10 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
             }
             int64_t mo[4] = {0, 0, 0, 0};
             int tflags = 0;
+            // this texture's texels (mo: from their start), then in the
+            // library or after the others
+            Bytes texdata_all;
+            std::swap(texdata, texdata_all);
             if (!tex_used[i]) {
                 // (flat only: no texels; the mips point at nothing)
             } else if (reduced[i]) {
@@ -1901,6 +2099,19 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
                     texdata.insert(texdata.end(), t->mips[k].begin(), t->mips[k].end());
                 }
             }
+            std::swap(texdata, texdata_all);   // texdata_all: this texture's
+            if (!texdata_all.empty()) {
+                int64_t at;
+                if (lib) {
+                    at = lib->add(texdata_all);
+                    in_lib[i] = true;
+                } else {
+                    while (texdata.size() % 4) texdata.push_back(0);
+                    at = int64_t(texdata.size());
+                    texdata.insert(texdata.end(), texdata_all.begin(), texdata_all.end());
+                }
+                for (auto &v : mo) v += at;
+            }
             table.u16(t->w);
             table.u16(t->h);
             table.u8(tex_avg[i]);
@@ -1912,10 +2123,15 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
         L["textures"] = {tofs, textures.size()};
         size_t texbase = blob.add(texdata);
         texture_bytes = texdata.size();
-        // the mip offsets are absolute within the blob
+        // the mip offsets are absolute within the blob (or the library's,
+        // which the cartridge builder makes the level's)
         for (size_t i = 0; i < textures.size(); i++) {
             if (!textures[i]) continue;
             size_t base = tofs + i * 24 + 8;
+            if (in_lib[i]) {
+                for (int k = 0; k < 4; k++) opt.game.relocs->push_back(uint32_t(base + 4 * size_t(k)));
+                continue;
+            }
             for (int k = 0; k < 4; k++) {
                 uint64_t v = blob.get_at(base + 4 * size_t(k), 4);
                 blob.put_at(base + 4 * size_t(k), uint32_t(v + texbase), 4);
@@ -1934,22 +2150,33 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
         }
         L["clipnodes"] = {blob.add(b), m.clipnodes.size()};
     }
+    // the lumps every level has the same of go in the cartridge's shared
+    // library when there is one (their header entries then hold library offsets)
+    std::vector<std::string> hdr_shared, ext_shared;
+    auto share = [&](std::map<std::string, Lump> &T, std::vector<std::string> &names, const std::string &k,
+                     const Bytes &b, size_t count, size_t a = 4) {
+        if (opt.game.lib) {
+            T[k] = {opt.game.lib->add(b, a), count};
+            names.push_back(k);
+        } else
+            T[k] = {blob.add(b, a), count};
+    };
     {   // palette as 32X CRAM words (BGR555)
         Buf b(big);
         for (int i = 0; i < 256; i++) {
             int r = pal.rgb[3 * i], g = pal.rgb[3 * i + 1], bb = pal.rgb[3 * i + 2];
             b.u16(((bb >> 3) << 10) | ((g >> 3) << 5) | (r >> 3));
         }
-        L["palette"] = {blob.add(b), 256};
+        share(L, hdr_shared, "palette", b.data(), 256);
     }
-    L["colormap"] = {blob.add(colormap), colormap.size()};
-    L["conchars"] = {blob.add(Bytes(conchars.begin(), conchars.begin() + 128 * 128)), 128 * 128};
+    share(L, hdr_shared, "colormap", colormap, colormap.size());
+    share(L, hdr_shared, "conchars", Bytes(conchars.begin(), conchars.begin() + 128 * 128), 128 * 128);
     {   // Quake's border tile for reduced screen sizes (a 64x64 qpic in gfx.wad)
         check(wad.count("backtile"), "gfx.wad has no backtile");
         const Bytes &bt = wad["backtile"];
         Reader r(bt);
         check(r.i32(0) == 64 && r.i32(4) == 64, "backtile is not 64x64");
-        L["backtile"] = {blob.add(r.slice(8, 64 * 64)), 64 * 64};
+        share(L, hdr_shared, "backtile", r.slice(8, 64 * 64), 64 * 64);
     }
 
     // game data: entities, flat-coloured models, sounds
@@ -2000,7 +2227,14 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
                     b[size_t(y * 128 + x)] = uint8_t(c);
                 }
         }
-        L["skytex"] = {blob.add(b), 128 * 128};
+        // (none when the sky is drawn flat with textures on too)
+        bool flat_sky = !E.flat_textures.empty();
+        for (auto &t : textures)
+            if (t && starts_with(t->name, "sky") && !always_flat(t->name)) flat_sky = false;
+        if (flat_sky || !sky)
+            L["skytex"] = {0, 0};
+        else
+            share(L, hdr_shared, "skytex", b, 128 * 128);
     }
 
     // ------------------------------------------------ extension lumps
@@ -2060,7 +2294,7 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
         for (auto c : fpt->cram) b.u16(c);
         for (auto c : fpt->remap) b.u8(c);
         b.bytes(fpt->cmap.data(), fpt->cmap.size());
-        X["flatpal"] = {blob.add(b, 16), 1};
+        share(X, ext_shared, "flatpal", b.data(), 1, 16);
     }
     int64_t extofs = 0;
     if (!X.empty()) {
@@ -2073,7 +2307,11 @@ Bytes build_level(const Pak &pak, const std::string &bsp_name, const LevelOption
             d.i32(it == X.end() ? 0 : int64_t(it->second.count));
         }
         extofs = int64_t(blob.add(d));
+        for (auto &k : ext_shared)
+            opt.game.relocs->push_back(uint32_t(size_t(extofs) + 8 + 8 * size_t(std::find(LEVEL_EXT_LUMPS.begin(), LEVEL_EXT_LUMPS.end(), k) - LEVEL_EXT_LUMPS.begin())));
     }
+    for (auto &k : hdr_shared)
+        opt.game.relocs->push_back(uint32_t(8 + 8 * size_t(std::find(LEVEL_LUMPS.begin(), LEVEL_LUMPS.end(), k) - LEVEL_LUMPS.begin())));
 
     // ------------------------------------------------ spawn point
     Vec3 spawn = {0.0, 0.0, 0.0};

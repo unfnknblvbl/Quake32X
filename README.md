@@ -6,7 +6,9 @@ Necropolis), playable from start to exit with most of their monsters,
 weapons, items, doors, lifts, secrets and sounds (see **Status** below for
 what is missing). A from-scratch engine runs on the 32X's two SH-2s, and
 the Mega Drive draws the text, the status bar border and the weapon in your
-hands.
+hands. A cartridge is 4 MB at most for now, so it holds two of these levels
+or so: the usual one is START (the episode and skill selection) and E1M1,
+textured with a grey flat-shaded mode; `build.sh` makes others.
 
 Version **0.7.0** (see [CHANGELOG.md](CHANGELOG.md)). It shows that Quake
 can run on the 32X; it is not a complete port, and it is not being
@@ -33,7 +35,8 @@ performance figures, the tools) is in [docs/TECHNICAL.md](docs/TECHNICAL.md).
   the Ring of Shadows.
 * Textured or flat-shaded drawing, the pause menu, the attract demo, the
   demo bot (on E1M1), 6-button pads and the XE-1 AP analogue pad.
-* Cartridges of 4 MB with no mapper, or larger ones with Sega's mapper.
+* Cartridges of up to 4 MB, which need no mapper. Every sound, texture and
+  model is stored once on the cartridge however many levels use it.
 
 **What does not work yet** (the converter leaves these out of the levels):
 
@@ -55,12 +58,12 @@ performance figures, the tools) is in [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
 ## Playing
 
-At power-on the cartridge plays Quake's own `demo1` as an attract mode, as
-Quake does. Press **START** for the menu, and pick **New game** to start
-E1M1. Each level's exit leads to the next, carrying over your health (back
+When the cartridge has E1M3, it plays Quake's own `demo1` (recorded on
+E1M3) at power-on as an attract mode, as Quake does; otherwise it starts
+the first level. Press **START** for the menu, and pick **New game** to
+start the first level. Each level's exit leads to the next, carrying over your health (back
 to between 50 and 100), armour, weapons and ammunition, as in Quake. Dying
-restarts the level. After E1M3 a closing screen ends the game, and B returns
-to the demo.
+restarts the level. After the last level a closing screen ends the game.
 
 Monsters: grunts, rottweilers, ogres, knights, a fiend or three, scrags and
 zombies (zombies only stay down when gibbed: use grenades). Weapons: axe,
@@ -141,9 +144,11 @@ editor's tools go further (E1M3 flat with plain colours and hard shadows:
 18 fps at 70%).
 
 The cartridge has only been run in emulators (PicoDrive, and the project's
-own cycle model). It is 9 MB (10 MB with `make PLAIN=1`) and uses Sega's standard bank-switching mapper
-(the *Super Street Fighter II* one), so real hardware needs a flash cart
-that provides that mapper for 32X games. That has not been tried yet.
+own cycle model). Cartridges are 4 MB at most for now, so they need no
+mapper; E1M1-E1M3 together do not fit (about 5.4 MB even without textures),
+so the usual cartridge is START and E1M1. The game still has the code for
+Sega's bank-switching mapper (the *Super Street Fighter II* one), which
+larger cartridges would need, but the converter does not build them.
 
 ## Building
 
@@ -164,29 +169,34 @@ cross compilers the first time (binutils for `sh-elf` and `m68k-elf`, GCC 13
 for the SH-2, about 20-40 minutes, into `~/.local/share/q32x-toolchain`),
 then builds `quake32x.32x`. Later runs skip straight to the cartridge.
 
-Run in a terminal, `build.sh` then asks what to put on the cartridge, so
-that it fits in 4 MB and needs no mapper (some flash carts and consoles may
-have trouble with Sega's mapper):
+Run in a terminal, `build.sh` then asks what to put on the cartridge, which
+must fit in 4 MB (so it needs no mapper: some flash carts and consoles may
+have trouble with one):
 
-1. **Keep the textures?** Without them every level is flat shaded and
-   smaller, so more maps fit.
-2. **Flat shading in greys?** Flat mode in `data/palettes/quake32x-greys.gpl`:
+1. **Textures:** full size, half size (a quarter of the space; walls look
+   softer close up) or none (flat shading only, so more maps fit). With
+   textures, the pause menu's **Textures** setting switches between textured
+   and flat shading as you play.
+2. **Liquids, skies and stained glass in plain colours?** (with textures)
+   They then take no space, with the textures on too, but lose their moving
+   surfaces; with textures on they take the nearest of Quake's own colours.
+3. **Flat shading in greys?** Flat mode in `data/palettes/quake32x-greys.gpl`:
    walls, floors, monsters and items in greys, with lava, water, slime,
-   teleporters, sky, blood and Quake's full-bright colours (fire, flashes,
-   lights) in colour.
-3. **Smaller sounds?** Full quality (as Quake has them), half rate (half
+   teleporters, sky, stained glass (yellow), blood and Quake's full-bright
+   colours (fire, flashes, lights) in colour.
+4. **Smaller sounds?** Full quality (as Quake has them), half rate (half
    the space, duller), packed (57% of the space, a faint hiss) or both (28%).
    The smaller ones take the mixer a little more work: 2-5% slower when
    many sounds play.
-4. **Which maps, in order.** It lists every map in your pak with its size
-   and asks until the choice fits. With the shareware pak and full sounds,
-   a textured cartridge holds one map and without textures E1M7 and E1M8
-   fit together; with both smaller sounds and no textures, two of most maps
-   fit (E1M1 and E1M5, for example).
+5. **Which maps, in order.** It lists every map in your pak with its size
+   on its own, then measures your choice together: maps share their sounds,
+   textures and models, so it shows what each adds and the running total,
+   and asks again until the choice fits.
 
-Without a terminal it builds the usual cartridge (E1M1-E1M3 with textures,
-9 MB, which needs the mapper); `MAPS=default ./build.sh` does the same from a
-terminal.
+Without a terminal it builds the usual cartridge: START and E1M1 with
+half-size textures, plain liquids, skies and glass, flat shading in greys
+and packed sounds (about 3.9 MB); `MAPS=default ./build.sh` does the same
+from a terminal.
 
 ```
 ./build.sh              # everything that is missing
@@ -196,7 +206,8 @@ terminal.
 PAK=~/quake/id1/pak0.pak ./build.sh    # take pak0.pak from elsewhere
 TC_PREFIX=/opt/q32x ./build.sh         # put the compilers somewhere else
 SKIP_DEPS=1 ./build.sh                 # don't run pacman
-MAPS="e1m1 e1m5" TEXTURES=0 GREY=1 SOUNDS=both ./build.sh   # choose without being asked
+MAPS="e1m1 e1m5" TEXTURES=none GREY=1 SOUNDS=both ./build.sh   # choose without being asked
+MAPS="start e1m1" TEXTURES=half FLAT_SPECIALS=1 SOUNDS=packed ./build.sh
 ```
 
 ### Elsewhere

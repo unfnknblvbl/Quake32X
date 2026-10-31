@@ -110,10 +110,26 @@ int main()
         auto lv = [](size_t n) { return RomLevel{"m", Bytes(n, 0x11)}; };
         RomInfo i1, i2;
         Bytes small = build_rom(prog, {lv(1000000), lv(1500000)}, "", &i1, Bytes(300000, 0x22));
-        CHECK(i1.linear && small.size() == (4u << 20) && i1.levels[0].first == 13 && i1.bank_page == 8 && i1.bank_pages == 5);
+        CHECK(i1.linear && small.size() == (4u << 20) && i1.levels[0].first == 8 && i1.bank_page == 47 && i1.bank_pages == 5);
         CHECK(small[0x300 + 12 + 128 + 3] == 1 && small[size_t(i1.levels[1].first) * 65536] == 0x11);
         Bytes big = build_rom(prog, {lv(2000000), lv(2000000)}, "", &i2, Bytes(300000, 0x22));
         CHECK(!i2.linear && big.size() >= (8u << 20) && big[0x300 + 12 + 128 + 3] == 0);
+        // the shared library after the levels: a level's reference becomes its distance
+        RomLevel a = lv(70000), b = lv(1000);
+        a.blob[100] = 0; a.blob[101] = 0; a.blob[102] = 0x01; a.blob[103] = 0x00;   // library offset 256
+        a.lib_relocs = {100};
+        b.blob[0] = b.blob[1] = b.blob[2] = b.blob[3] = 0;
+        b.lib_relocs = {0};
+        RomInfo i3;
+        Bytes r3 = build_rom(prog, {a, b}, "", &i3, Bytes(1000, 0x22));
+        auto u32at = [&](size_t o) { return uint32_t(r3[o]) << 24 | uint32_t(r3[o + 1]) << 16 | uint32_t(r3[o + 2]) << 8 | r3[o + 3]; };
+        size_t la = size_t(i3.levels[0].first) * 65536, lb = size_t(i3.levels[1].first) * 65536, lib = size_t(i3.bank_page) * 65536;
+        CHECK(lib > lb && u32at(la + 100) == lib + 256 - la && u32at(lb) == lib - lb && r3[lib] == 0x22);
+        bool threw = false;
+        RomLevel c = lv(2000000), d2 = lv(2000000);
+        c.lib_relocs = {0};
+        try { build_rom(prog, {c, d2}, "", nullptr, Bytes(300000, 0x22)); } catch (const std::exception &) { threw = true; }
+        CHECK(threw);   // cartridges with a library are 4 MB at most
     }
     {   // smaller sounds: sizes, and what plays back stays close to the original
         Sound snd;

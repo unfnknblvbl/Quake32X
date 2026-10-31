@@ -47,7 +47,7 @@ int face_setup(rcpu_t *rc, frec_t *fr)
     int32_t distinv, A, B, zref, sr, sd, tr, td, dzidx, dzidy;
     int mip;
 
-    if ((!view.textures && !(f->flags & FF_KEEPTEX)) || (f->flags & FF_SKY))
+    if ((!view.textures && !(f->flags & FF_KEEPTEX)) || (f->flags & (FF_SKY | FF_FLATTEX)))
         return 1;
     ti = &lvl.texinfo[f->texinfo];
     pl = &lvl.planes[f->plane];

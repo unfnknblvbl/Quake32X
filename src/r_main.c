@@ -514,6 +514,8 @@ static void draw_range(rcpu_t *rc, int a, int b)
         rc->spancount += fr->nspan;
         if (!view.textures && !(g->flags & FF_KEEPTEX))
             draw_spans_flat(rc, fr, view.lighting ? g->lit : g->unlit);
+        else if (g->flags & FF_FLATTEX)
+            draw_spans_flat(rc, fr, (uint8_t)(view.lighting ? fr->f->lightofs >> 8 : fr->f->lightofs));
         else if (g->flags & FF_SKY)
             draw_spans_sky(rc, fr);
         else if (g->flags & FF_TURB)

@@ -20,12 +20,12 @@
 ! Mega Drive ROM header at 0x100
         .ascii  "SEGA 32X        "
         .ascii  "(C)HOME 2026.OCT"
-        .ascii  "QUAKE 32X - EPIS"
-        .ascii  "ODE 1 (E1M1-E1M3"
-        .ascii  ")               "
-        .ascii  "QUAKE 32X - EPIS"
-        .ascii  "ODE 1 (E1M1-E1M3"
-        .ascii  ")               "
+        .ascii  "QUAKE 32X       "   /* the game names: the cartridge builder */
+        .ascii  "                "   /* puts the levels' names after it */
+        .ascii  "                "
+        .ascii  "QUAKE 32X       "
+        .ascii  "                "
+        .ascii  "                "
         .ascii  "GM Q32X0001-00"
         .word   0x0000                  /* checksum - patched by tools/fixrom.py */
         .ascii  "J6              "

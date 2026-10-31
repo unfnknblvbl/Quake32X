@@ -42,12 +42,18 @@ static const char *USAGE =
     "  flat-palette project.q32x level palette.gpl [key=value...] out.q32x\n"
     "        flat mode in a palette of your own for a level (.pal .gpl .hex .act .lmp .png, or grey);\n"
     "        keys: vividness variety special_kinds neutral_surfaces levels occlusion reach rays up_bias ambient lights lightmaps highlight shade enabled\n"
-    "  maps [--no-textures] [--palette file] [--sounds full|half|packed|both] [--template project.q32x] pak0.pak\n"
+    "  maps [cartridge options] [--template project.q32x] pak0.pak\n"
     "        every map in the pak converted on its own: name, bytes (its sounds included), title, and\n"
     "        what in it the game does not do yet\n"
-    "  make-project [--no-textures] [--palette file] [--sounds full|half|packed|both] --template project.q32x\n"
-    "        pak0.pak out.q32x map...\n"
+    "  size [cartridge options] [--template project.q32x] pak0.pak map...\n"
+    "        these maps on one cartridge, in order: per map its own bytes, what it adds to the shared\n"
+    "        library (what the maps before it have not already put there) and the running total;\n"
+    "        then the cartridge's size against 4 MB (exit status 2: too big)\n"
+    "  make-project [cartridge options] --template project.q32x pak0.pak out.q32x map...\n"
     "        a project of these maps with the template's settings (its first level's edits for each)\n"
+    "    cartridge options: --no-textures, --half-textures (a quarter of the texels), --flat-specials\n"
+    "        (liquids, skies and stained glass flat with textures on too: no texels), --palette file\n"
+    "        (flat mode's colours), --sounds full|half|packed|both\n"
     "  export project.q32x out_dir\n"
     "        every level, the Mega Drive data and (given the program) the cartridge of a project\n"
     "  auto project.q32x [level]\n"
@@ -104,6 +110,9 @@ static void cartridge_edits(LevelEdits &e, bool no_textures, const std::string &
     f.variety = 0;
     f.special_kinds = true;
     f.neutral_surfaces = true;
+    // stained glass in the palette's nearest to Quake's full-bright yellow
+    ColourMatch cm(f.rgb);
+    e.colour_rules.push_back({{"window*"}, 0, cm.nearest(Rgb{231, 227, 87})});
 }
 
 static std::string abs_path(const std::string &p) { return std::filesystem::absolute(p).lexically_normal().string(); }
@@ -247,12 +256,13 @@ static int run(std::vector<std::string> a)
         p.save(a.back());
         return 0;
     }
-    if (cmd == "maps" || cmd == "make-project") {
-        bool notex = flag(a, "--no-textures");
+    if (cmd == "maps" || cmd == "make-project" || cmd == "size") {
+        bool notex = flag(a, "--no-textures"), half = flag(a, "--half-textures"), specials = flag(a, "--flat-specials");
         std::string pal = take(a, "--palette"), tpl = take(a, "--template"), snd = take(a, "--sounds");
         int sfmt = snd == "half" ? SF_HALF : snd == "packed" ? SF_PACK : snd == "both" ? SF_HALF | SF_PACK : 0;
         check(snd.empty() || snd == "full" || sfmt, "--sounds: full, half, packed or both");
-        if ((cmd == "maps" && a.size() != 1) || (cmd == "make-project" && (a.size() < 3 || tpl.empty()))) {
+        if ((cmd == "maps" && a.size() != 1) || (cmd == "make-project" && (a.size() < 3 || tpl.empty())) ||
+            (cmd == "size" && a.size() < 2)) {
             std::fputs(USAGE, stderr);
             return 1;
         }
@@ -264,6 +274,9 @@ static int run(std::vector<std::string> a)
         t.program_path = t.program_path.empty() ? "" : abs_path(t.resolve(t.program_path));
         t.attach_pak(&pak);
         t.sound_format = sfmt;
+        t.half_textures = half && !notex;
+        t.flat_textures.clear();
+        if (specials && !notex) t.flat_textures = {"*water*", "*slime*", "*lava*", "*teleport*", "sky*", "window*"};
         // the maps' demos: the first of demo1..3 recorded on each
         std::map<std::string, std::string> demo_of;
         for (int k = 1; k <= 3; k++) {
@@ -309,9 +322,10 @@ static int run(std::vector<std::string> a)
             }
             return 0;
         }
-        check(a.size() - 2 <= size_t(ROM_MAX_LEVELS), "at most " + std::to_string(ROM_MAX_LEVELS) + " levels");
+        const size_t first_map = cmd == "size" ? 1 : 2;
+        check(a.size() - first_map <= size_t(ROM_MAX_LEVELS), "at most " + std::to_string(ROM_MAX_LEVELS) + " levels");
         t.levels.clear();
-        for (size_t i = 2; i < a.size(); i++) {
+        for (size_t i = first_map; i < a.size(); i++) {
             LevelProject lp;
             lp.name = lower(a[i]);
             lp.bsp = "maps/" + lp.name + ".bsp";
@@ -323,6 +337,30 @@ static int run(std::vector<std::string> a)
             for (auto &l : t.levels) have_demo = have_demo || !l.demo.empty();
             if (it != demo_of.end() && !have_demo) lp.demo = it->second;
             t.levels.push_back(lp);
+        }
+        if (cmd == "size") {
+            // as the cartridge is built (Project::export_all): one library for all
+            SharedLib lib;
+            size_t at = ROM_PAGE;   // the program's page
+            const size_t U = ROM_LINEAR_STEP;
+            auto up = [&](size_t v) { return (v + U - 1) / U * U; };
+            for (auto &lp : t.levels) {
+                LevelOptions o = t.level_options(lp, true);
+                o.game = t.game_options(nullptr);
+                std::vector<uint32_t> relocs;
+                o.game.lib = &lib;
+                o.game.relocs = &relocs;
+                Bytes bsp = t.level_bsp(lp);
+                o.bsp_data = &bsp;
+                size_t before = lib.data.size();
+                Bytes b = build_level(pak, lp.bsp, o, nullptr, nullptr);
+                at = up(at + b.size());
+                std::printf("%s\t%zu\t%zu\t%zu\n", lp.name.c_str(), b.size(), lib.data.size() - before, at + up(lib.data.size()));
+                std::fflush(stdout);
+            }
+            size_t total = at + up(lib.data.size());
+            std::printf("total\t%zu\t%zu\t%zu\n", total, size_t(ROM_LINEAR_MAX), lib.saved);
+            return total <= ROM_LINEAR_MAX ? 0 : 2;
         }
         t.save(a[1]);
         return 0;

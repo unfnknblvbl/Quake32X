@@ -21,6 +21,9 @@ constexpr size_t ROM_LINEAR_STEP = 64 * 1024;   // where its levels may start
 struct RomLevel {
     std::string name;   // up to 11 characters (the file name without extension)
     Bytes blob;
+    // where the blob holds 32-bit offsets into the shared library (the bank
+    // argument); the builder adds the library's distance from the level
+    std::vector<uint32_t> lib_relocs = {};
 };
 
 struct RomInfo {
@@ -38,9 +41,10 @@ struct RomInfo {
 };
 
 // version: put in the Mega Drive header's memo field (0x1C8); empty = leave it.
-// bank: the shared sound bank (needs game 0.7.0), mapped after each level.
-// A cartridge that fits in 4 MB is built without the mapper (needs game 0.7.0)
-// unless allow_linear is false.
+// bank: the shared library (sounds, textures, models; needs game 0.7.0). A
+// cartridge that fits in 4 MB is built without the mapper (needs game 0.7.0),
+// the library after the levels; unless allow_linear is false. Levels that
+// use the library (lib_relocs) need the 4 MB layout: more is an error.
 Bytes build_rom(Bytes program, const std::vector<RomLevel> &levels, const std::string &version,
                 RomInfo *info = nullptr, const Bytes &bank = {}, bool allow_linear = true);
 // the size of the 4 MB layout's contents (more than ROM_LINEAR_MAX: it needs the mapper)

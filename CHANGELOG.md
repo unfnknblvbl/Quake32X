@@ -4,7 +4,37 @@ Versions are 0.x.y until the first public release, 1.0.0. The minor number
 goes up for new features, the last number for fixes. Versions before 0.5.0
 were tagged afterwards, on the commits listed.
 
-## 0.7.0 — 2026-10-26
+## Unreleased
+
+- **Cartridges are 4 MB at most for now** (no mapper). The converter and
+  `build.sh` refuse more, saying by how much.
+- **One shared library per cartridge:** every sound, texture, model and
+  common table is stored once however many levels use it (START and E1M1:
+  about 380 KB less). The game reads it through the offsets it always used.
+- **Half-size textures** (a quarter of the texels) and **plain liquids,
+  skies and stained glass** with textures on too (no texels for them). With
+  both, START and E1M1 fit in about 3.9 MB with textures *and* the grey flat
+  mode, switched from the pause menu.
+- **`build.sh`:** asks full, half or no textures, then plain liquids, skies
+  and glass; measures the chosen maps together (`q32x-convert size`: what
+  each adds, the running total) and asks again until they fit. The usual
+  cartridge is now START and E1M1 (half-size textures, greys, packed
+  sounds), since E1M1-E1M3 no longer fit. Stained glass is yellow in a
+  flat palette.
+- The cartridge header names its levels (e.g. "QUAKE 32X - START E1M1").
+- Fixed: closed split doors showed their hidden edges through themselves
+  (faces pressed against another solid face are left out).
+- Fixed: messages longer than the status line (START's episode signs)
+  overran a buffer and crashed the game; long messages now show a line at
+  a time, and maps' `\n` line breaks are real ones.
+- Fixed: only one of a level's exits worked (START has five: all its
+  slipgates now leave the level).
+- Fixed: START's bossgate floor was not solid; func_wall and func_bossgate
+  models are now solid to the player and monsters (unless the level's clip
+  hulls would grow too big: E1M6 keeps two apart).
+- Fixed: teleporters with no destination stopped START from converting.
+
+## 0.7.0 - 2026-10-26
 
 The level editor, and the game support for what it does to levels. Levels
 built without the editor's changes play exactly as in 0.6.0.
@@ -116,7 +146,7 @@ built without the editor's changes play exactly as in 0.6.0.
   textured faces, the sound bank, trimmed models and packed weapon tiles is
   9 MB instead of 10, with the Mega Drive data down from 289 KB to 101 KB.
 
-## 0.6.0 — 2026-10-18
+## 0.6.0 - 2026-10-18
 
 Speed, from giving the second CPU more of the frame and from assembly.
 
@@ -138,7 +168,7 @@ Speed, from giving the second CPU more of the frame and from assembly.
 - Tried and left out: skipping faces already hidden behind what is drawn
   (it cost more than it saved), and reordering the level data (about 1%).
 
-## 0.5.0 — 2026-10-18
+## 0.5.0 - 2026-10-18
 
 Speed, mostly for flat shading and the second CPU.
 
@@ -167,14 +197,14 @@ Speed, mostly for flat shading and the second CPU.
 - `build.sh`: builds the compilers and the cartridge on CachyOS / Arch Linux.
 - New README for players; the technical notes moved to `docs/TECHNICAL.md`.
 
-## 0.4.1 — 2026-10-18
+## 0.4.1 - 2026-10-18
 
 - Dead monsters (and gibbed heads) teleport away a second after they land,
   with Quake's teleport flash.
 - The weapon in your hands is drawn the way Quake draws it: dithered, at
   1.3x, with three palettes for light, normal and dark areas.
 
-## 0.4.0 — 2026-10-17
+## 0.4.0 - 2026-10-17
 
 The three-level cartridge.
 
@@ -189,14 +219,14 @@ The three-level cartridge.
 - Quake's `demo1` (in E1M3) plays as the attract mode at power-on, in real
   time.
 
-## 0.3.0 — 2026-10-17
+## 0.3.0 - 2026-10-17
 
 - Analogue pad support (XE-1 AP and emulator versions of it), with its own
   menu page.
 - The Mega Drive draws the menu text, the border around a smaller view and
   the weapon in your hands.
 
-## 0.2.0 — 2026-10-17
+## 0.2.0 - 2026-10-17
 
 E1M1 becomes a game.
 
@@ -206,7 +236,7 @@ E1M1 becomes a game.
 - Button remapping.
 - A bot that plays E1M1 to the exit, from the menu.
 
-## 0.1.0 — 2026-10-17
+## 0.1.0 - 2026-10-17
 
 The first version: E1M1 to walk (or fly) around in.
 

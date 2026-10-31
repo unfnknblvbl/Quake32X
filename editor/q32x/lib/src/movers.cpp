@@ -11,8 +11,9 @@ const std::vector<std::string> MOVER_CLASSES = {"func_door", "func_door_secret",
                                                 "func_train"};
 const std::vector<std::string> TRIGGER_CLASSES = {"trigger_once", "trigger_multiple", "trigger_secret",
                                                   "trigger_counter", "trigger_teleport"};
-const std::vector<std::string> STATIC_CLASSES = {"func_wall", "func_illusionary", "func_episodegate",
-                                                 "func_bossgate"};
+// (func_episodegate is not here: it appears only once its episode is done,
+// and the cartridge keeps no runes)
+const std::vector<std::string> STATIC_CLASSES = {"func_wall", "func_illusionary", "func_bossgate"};
 
 static bool in(const std::vector<std::string> &v, const std::string &s)
 {
@@ -299,7 +300,9 @@ std::vector<Trigger> build_triggers(const std::vector<Entity> &ents, const Bsp &
             for (const auto &d : ents)
                 if (d.get("classname") == "info_teleport_destination" && d.opt("targetname") == e.opt("target"))
                     dest = &d;
-            check(dest != nullptr, "trigger_teleport without a destination");
+            // (the start map has teleporters to places only deathmatch or the
+            // registered game has: left out)
+            if (!dest) continue;
             Vec3 o = dest->vec("origin");
             t.has_dest = true;
             t.dest = {o[0], o[1], o[2] + 27};

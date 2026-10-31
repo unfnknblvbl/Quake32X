@@ -1,6 +1,7 @@
 #include "q32x/rom.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace q32x {
 
@@ -32,6 +33,20 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
         check(prog.size() >= 0x1C8 + 40, "program too small for a Mega Drive header");
         std::copy(memo.begin(), memo.end(), prog.begin() + 0x1C8);
     }
+    {   // the header's game names (domestic and overseas, 48 characters): the levels on it
+        std::string title = "QUAKE 32X -";
+        for (auto &lv : levels) {
+            std::string nm = lv.name.substr(0, 11);
+            for (auto &c : nm) c = char(std::toupper(static_cast<unsigned char>(c)));
+            if (title.size() + 1 + nm.size() > 48) break;
+            title += " " + nm;
+        }
+        if (levels.empty()) title = "QUAKE 32X";
+        title.resize(48, ' ');
+        check(prog.size() >= 0x180, "program too small for a Mega Drive header");
+        std::copy(title.begin(), title.end(), prog.begin() + 0x120);
+        std::copy(title.begin(), title.end(), prog.begin() + 0x150);
+    }
     check(prog.size() <= ROM_PAGE, "program too big for the fixed page: " + std::to_string(prog.size()) + " bytes");
     check(levels.size() <= size_t(ROM_MAX_LEVELS), "more than 8 levels");
     Bytes d = prog;
@@ -42,27 +57,43 @@ Bytes build_rom(Bytes prog, const std::vector<RomLevel> &levels, const std::stri
     };
     std::vector<Dir> dirent;
     if (info) info->levels.clear();
+    bool uses_lib = false;
+    for (auto &lv : levels) uses_lib |= !lv.lib_relocs.empty();
     const bool linear = allow_linear && linear_size(levels, bank) <= ROM_LINEAR_MAX;
+    if (uses_lib)
+        check(linear, "the cartridge is " + std::to_string(linear_size(levels, bank) / 1024) +
+                          " KB, more than 4096 KB: leave out a level, textures or sounds (cartridges are 4 MB at most for now)");
     int bank_page = 0, bank_pages = 0;
     size_t size = 0;
     if (linear) {
         // everything where the SH-2s see it: positions and sizes in 64 KB steps
+        // (the levels, then the shared library: the levels' offsets into it
+        // stay positive)
         const size_t U = ROM_LINEAR_STEP;
-        if (!bank.empty()) {
-            bank_page = int(d.size() / U);
-            bank_pages = int(up(bank.size(), U) / U);
-            d.insert(d.end(), bank.begin(), bank.end());
-            d.resize(up(d.size(), U), 0xFF);
-        }
+        size_t lib_at = d.size();
+        for (auto &lv : levels) lib_at = up(lib_at + lv.blob.size(), U);
         for (auto &lv : levels) {
             int first = int(d.size() / U);
+            size_t at = d.size();
             d.insert(d.end(), lv.blob.begin(), lv.blob.end());
+            for (uint32_t r : lv.lib_relocs) {
+                check(r + 4 <= lv.blob.size(), lv.name + ": a library reference outside the level");
+                uint32_t v = uint32_t(d[at + r]) << 24 | uint32_t(d[at + r + 1]) << 16 | uint32_t(d[at + r + 2]) << 8 | d[at + r + 3];
+                v += uint32_t(lib_at - at);
+                for (int k = 0; k < 4; k++) d[at + r + size_t(k)] = uint8_t(v >> (24 - 8 * k));
+            }
             d.resize(up(d.size(), U), 0xFF);
             int npages = int(d.size() / U) - first;
             std::string name = lv.name.substr(0, 11);
             bool demo = level_has_demo(lv.blob);
             dirent.push_back({first, npages, demo ? 1 : 0, name});
             if (info) info->levels.push_back({name, first, npages, lv.blob.size(), demo});
+        }
+        if (!bank.empty()) {
+            bank_page = int(d.size() / U);
+            bank_pages = int(up(bank.size(), U) / U);
+            d.insert(d.end(), bank.begin(), bank.end());
+            d.resize(up(d.size(), U), 0xFF);
         }
         size = ROM_LINEAR_MAX;
         // (a smaller power of two when it fits: 1, 2 or 4 MB)

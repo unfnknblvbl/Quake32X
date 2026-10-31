@@ -331,6 +331,12 @@ Json Project::to_json() const
     }
     j.set("shared_bank", shared_bank);
     if (sound_format) j.set("sound_format", sound_format);
+    if (half_textures) j.set("half_textures", true);
+    if (!flat_textures.empty()) {
+        Json m = Json::array();
+        for (auto &g : flat_textures) m.push(g);
+        j.set("flat_textures", m);
+    }
     if (!sounds.empty()) {
         Json o = Json::object();
         for (auto &kv : sounds) {
@@ -434,6 +440,8 @@ Project Project::from_json(const Json &j, const std::string &path)
     }
     p.shared_bank = j["shared_bank"].as_bool();
     p.sound_format = std::clamp(j["sound_format"].as_int(0), 0, 3);
+    p.half_textures = j["half_textures"].as_bool();
+    for (auto &g : j["flat_textures"].items()) p.flat_textures.push_back(g.as_string(""));
     for (auto &kv : j["sounds"].members()) {
         SoundProject s;
         s.edit.gain = kv.second["gain"].as_number(1.0);
@@ -552,7 +560,11 @@ void Project::texture_edits(const Bsp &bsp, const std::string &level, LevelEdits
                 if (glob_match(lower(m), t->name)) rule = &r;
             if (rule) break;
         }
-        if (!rule) continue;
+        if (!rule) {
+            if (half_textures && !starts_with(t->name, "*") && !starts_with(t->name, "sky") && t->w >= 2 && t->h >= 2)
+                e.textures[t->name] = auto_reduce(*t, pal, 1, false);
+            continue;
+        }
         RgbImage im;
         if (!rule->image.empty()) {
             auto it = images.find(rule->image);
@@ -699,7 +711,8 @@ LevelOptions Project::level_options(const LevelProject &lp, bool big_endian) con
     o.demo = lp.demo;
     o.flat_tol = lp.flat_tol;
     o.edits = lp.edits;
-    if (!texture_rules.empty() || !reduced.empty()) texture_edits(Bsp::parse(level_bsp(lp)), lp.name, o.edits);
+    if (!texture_rules.empty() || !reduced.empty() || half_textures) texture_edits(Bsp::parse(level_bsp(lp)), lp.name, o.edits);
+    for (auto &g : flat_textures) o.edits.flat_textures.push_back(g);
     return o;
 }
 
@@ -881,26 +894,38 @@ ExportResult Project::export_all(const std::string &dir, std::string *log) const
     try {
         fs::create_directories(u8path(dir));
         auto out = [&](const std::string &name) { return pathstr(u8path(dir) / u8path(name)); };
-        SoundBank bank = build_bank(log);
+        // a cartridge has one shared library: every sound, texture, model and
+        // common table once however many levels use it (levels on their own
+        // keep their own, with the project's sound bank if it has one)
+        const bool cartridge = !program_path.empty();
+        SoundBank bank = build_bank(cartridge ? nullptr : log);
+        SharedLib lib;
         std::vector<RomLevel> rl;
         for (auto &lp : levels) {
             LevelInfo info;
             LevelOptions o = level_options(lp, true);
-            o.game = game_options(shared_bank ? &bank : nullptr);
+            o.game = game_options(!cartridge && shared_bank ? &bank : nullptr);
+            std::vector<uint32_t> relocs;
+            if (cartridge) {
+                o.game.lib = &lib;
+                o.game.relocs = &relocs;
+            }
             Bytes bsp = level_bsp(lp);
             o.bsp_data = &bsp;
             std::string l;
             Bytes b = q32x::build_level(pak(), lp.bsp, o, &info, &l);
             std::string f = out(lp.name + ".lvl");
-            write_file(f, b);
-            res.files.push_back(f);
+            if (!cartridge) write_file(f, b), res.files.push_back(f);   // (a level on its own needs no library)
             if (log) *log += lp.name + ": " + std::to_string(b.size() / 1024) + " KB\n";
-            rl.push_back({lp.name, b});
+            rl.push_back({lp.name, b, relocs});
         }
+        if (cartridge && log)
+            *log += "shared library: " + std::to_string(lib.data.size() / 1024) + " KB (sounds, textures, models), sharing saved " +
+                    std::to_string(lib.saved / 1024) + " KB\n";
         MdGfx md_out = build_mdgfx(pak(), md, log);
         write_file(out("md_data.bin"), md_out.data);
         res.files.push_back(out("md_data.bin"));
-        if (shared_bank) {
+        if (!cartridge && shared_bank) {
             write_file(out("bank.bin"), bank.data);
             res.files.push_back(out("bank.bin"));
         }
@@ -913,7 +938,7 @@ ExportResult Project::export_all(const std::string &dir, std::string *log) const
             prog.resize(MD_AT);
             prog.insert(prog.end(), md_out.data.begin(), md_out.data.end());
             RomInfo info;
-            Bytes rom = build_rom(prog, rl, version, &info, shared_bank ? bank.data : Bytes{});
+            Bytes rom = build_rom(prog, rl, version, &info, lib.data);
             std::string f = out(rom_name + ".32x");
             write_file(f, rom);
             res.files.push_back(f);
