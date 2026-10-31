@@ -2,7 +2,7 @@
   "format": 1,
   "pak": "pak0.pak",
   "program": "../build/q32x.bin",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "rom_name": "quake32x",
   "levels": [
     {

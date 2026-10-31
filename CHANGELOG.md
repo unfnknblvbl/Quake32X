@@ -4,7 +4,7 @@ Versions are 0.x.y until the first public release, 1.0.0. The minor number
 goes up for new features, the last number for fixes. Versions before 0.5.0
 were tagged afterwards, on the commits listed.
 
-## Unreleased
+## 0.8.0 - 2026-10-31
 
 - **Cartridges are 4 MB at most for now** (no mapper). The converter and
   `build.sh` refuse more, saying by how much.
@@ -22,6 +22,8 @@ were tagged afterwards, on the commits listed.
   sounds), since E1M1-E1M3 no longer fit. Stained glass is yellow in a
   flat palette.
 - The cartridge header names its levels (e.g. "QUAKE 32X - START E1M1").
+- ANALOGUE.md: the analogue controls, and the XE-1 AP protocol (with
+  32X-HD's extension) the game reads.
 - Fixed: closed split doors showed their hidden edges through themselves
   (faces pressed against another solid face are left out).
 - Fixed: messages longer than the status line (START's episode signs)

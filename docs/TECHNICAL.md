@@ -127,7 +127,7 @@ rendering behind the menu, so every change shows up immediately.
 (The monster counts are Quake's normal skill.)
 
 (The blob sizes are from 0.6, textured with full sounds, each level with all
-it uses; on a 0.7.0 cartridge the library holds what they share.)
+it uses; on a 0.8.0 cartridge the library holds what they share.)
 
 **Cartridges are 4 MB at most for now**: the converter refuses more
 (`build_rom`: "more than 4096 KB"), and `build.sh` asks again. What
@@ -151,7 +151,7 @@ PicoDrive turns the mapper on for any 32X ROM over 4 MB. On real hardware it
 needs a cartridge or flash cart that provides the mapper for a 32X game;
 that has not been tried.
 
-**Cartridges of 4 MB or less** (0.7.0) need no mapper. The SH-2s see the
+**Cartridges of 4 MB or less** (0.7.0; the only kind since 0.8.0) need no mapper. The SH-2s see the
 whole cartridge, so the converter packs the levels after the program page
 at 64 KB steps, then the **shared library**, sets bit 0 of the level
 directory's flags word, and writes the directory's page numbers and counts

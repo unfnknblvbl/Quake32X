@@ -87,7 +87,7 @@ public:
     std::string path;          // the .q32x file (empty: not saved yet)
     std::string pak_path;
     std::string program_path;  // the game program (q32x.bin) for the cartridge
-    std::string version = "0.7.0";
+    std::string version = "0.8.0";
     std::string rom_name = "quake32x";
     std::vector<LevelProject> levels;
     std::vector<TextureRule> texture_rules;

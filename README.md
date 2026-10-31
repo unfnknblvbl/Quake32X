@@ -10,7 +10,7 @@ hands. A cartridge is 4 MB at most for now, so it holds two of these levels
 or so: the usual one is START (the episode and skill selection) and E1M1,
 textured with a grey flat-shaded mode; `build.sh` makes others.
 
-Version **0.7.0** (see [CHANGELOG.md](CHANGELOG.md)). It shows that Quake
+Version **0.8.0** (see [CHANGELOG.md](CHANGELOG.md)). It shows that Quake
 can run on the 32X; it is not a complete port, and it is not being
 actively developed.
 
@@ -106,7 +106,9 @@ The sticks also work the menus. Everything above can be changed in
 
 DualAnalogueAdapter, a separate project, turns an Xbox, PlayStation or
 other modern pad (Bluetooth or USB) into this pad, or into an ordinary
-6-button pad.
+6-button pad. [ANALOGUE.md](ANALOGUE.md) describes the analogue controls and
+the protocol the game reads, for anyone making their own pad, adapter or
+emulator support.
 
 ## Menu
 
