@@ -1,14 +1,18 @@
 # Quake 32X
 
-A proof of concept: Quake's first three levels on a stock Sega 32X, E1M1
-(the Slipgate Complex), E1M2 (Castle of the Damned) and E1M3 (the
-Necropolis), playable from start to exit with most of their monsters,
-weapons, items, doors, lifts, secrets and sounds (see **Status** below for
-what is missing). A from-scratch engine runs on the 32X's two SH-2s, and
-the Mega Drive draws the text, the status bar border and the weapon in your
-hands. A cartridge is 4 MB at most for now, so it holds two of these levels
-or so: the usual one is START (the episode and skill selection) and E1M1,
-textured with a grey flat-shaded mode; `build.sh` makes others.
+A proof of concept: Quake on a stock Sega 32X. A from-scratch engine runs
+on the 32X's two SH-2s, and the Mega Drive draws the text, the status bar
+border and the weapon in your hands.
+
+A cartridge is 4 MB at most for now, which holds about two levels. **The
+usual cartridge has two: START** (the introduction, where you pick a skill
+and an episode) **and E1M1** (the Slipgate Complex), textured, with a grey
+flat-shaded mode on the pause menu. E1M1 plays from start to exit with its
+monsters, weapons, items, doors, lifts, secrets and sounds (see **Status**
+below for what is missing). The engine also plays E1M2 (Castle of the
+Damned) and E1M3 (the Necropolis) to their exits, but they are not on the
+usual cartridge: `build.sh` can make a cartridge with other levels, as many
+as fit in 4 MB.
 
 Version **0.8.0** (see [CHANGELOG.md](CHANGELOG.md)). It shows that Quake
 can run on the 32X; it is not a complete port, and it is not being
@@ -26,15 +30,21 @@ performance figures, the tools) is in [docs/TECHNICAL.md](docs/TECHNICAL.md).
 
 **What works** (in emulators and the cycle model):
 
-* E1M1, E1M2 and E1M3 from start to exit: their doors, lifts, buttons,
-  secrets, keys, teleporters, traps, liquids and sounds.
+* On the usual cartridge, START and E1M1. In START, every skill hall leads
+  on to the episodes, but the game plays at normal skill whichever you
+  take, and every episode's slipgate leads to E1M1 (the cartridge holds no
+  other episode); the gate to the final level stays shut, as in Quake.
+* E1M1, and (on a cartridge you build with them) E1M2 and E1M3, from start
+  to exit: their doors, lifts, buttons, secrets, keys, teleporters, traps,
+  liquids and sounds.
 * Monsters: Grunts, Rottweilers, Ogres, Knights, Fiends, Scrags and Zombies.
 * Weapons: axe, shotgun, double-barrelled shotgun, nailgun and grenade
   launcher.
 * Items: health, ammunition, armour, keys, the Quad Damage, the Biosuit and
   the Ring of Shadows.
-* Textured or flat-shaded drawing, the pause menu, the attract demo, the
-  demo bot (on E1M1), 6-button pads and the XE-1 AP analogue pad.
+* Textured or flat-shaded drawing, the pause menu, the attract demo (on a
+  cartridge with E1M3), the demo bot (on a cartridge that starts with
+  E1M1), 6-button pads and the XE-1 AP analogue pad.
 * Cartridges of up to 4 MB, which need no mapper. Every sound, texture and
   model is stored once on the cartridge however many levels use it.
 
@@ -51,23 +61,29 @@ performance figures, the tools) is in [docs/TECHNICAL.md](docs/TECHNICAL.md).
   not in the shareware pak and would need Shub-Niggurath's ending.
 * Deathmatch and co-op; saving; music (the 32X has no CD audio here).
 * The demo bot follows a route made for E1M1, from the start of the first
-  level on the cartridge, so it only plays properly when that is E1M1.
+  level on the cartridge, so it only plays properly when that is E1M1 (on
+  the usual cartridge the first level is START, so it does not).
 * It has not been tested on real hardware (above).
 
 `build.sh` shows what is missing from each map before you choose.
 
 ## Playing
 
-When the cartridge has E1M3, it plays Quake's own `demo1` (recorded on
-E1M3) at power-on as an attract mode, as Quake does; otherwise it starts
-the first level. Press **START** for the menu, and pick **New game** to
-start the first level. Each level's exit leads to the next, carrying over your health (back
-to between 50 and 100), armour, weapons and ammunition, as in Quake. Dying
-restarts the level. After the last level a closing screen ends the game.
+The usual cartridge starts in START at power-on. Walk through a skill
+hall, then into any episode's slipgate, to go to E1M1; at E1M1's exit a
+closing screen ends the game. Press **START** for the menu, and **New
+game** starts again from the first level.
 
-Monsters: grunts, rottweilers, ogres, knights, a fiend or three, scrags and
-zombies (zombies only stay down when gibbed: use grenades). Weapons: axe,
-shotgun, super shotgun, nailgun and grenade launcher.
+On a cartridge you build with other levels, each level's exit leads to the
+next, carrying over your health (back to between 50 and 100), armour,
+weapons and ammunition, as in Quake, and the last ends with the closing
+screen. A cartridge with E1M3 plays Quake's own `demo1` (recorded on E1M3)
+at power-on as an attract mode, as Quake does. Dying restarts the level.
+
+Monsters (E1M1: grunts and rottweilers; E1M2 and E1M3 add ogres, knights,
+fiends, scrags and zombies, which only stay down when gibbed: use
+grenades). Weapons: axe, shotgun, super shotgun, nailgun and grenade
+launcher.
 
 ### Controls (3- or 6-button pad)
 
@@ -118,7 +134,7 @@ so you see each change at once. The version number is at the top left.
 
 | Option | Choices | What it does |
 |---|---|---|
-| New game | | E1M1 from the start: 100 health, axe, shotgun, 25 shells |
+| New game | | The first level from the start: 100 health, axe, shotgun, 25 shells |
 | Textures | ON / OFF (flat) | Texture-mapped walls, or flat shading: one colour per wall, worked out from the texture and the level's light when the cartridge is built. Buttons, switches, key-door markings and exit signs stay textured. Flat is much faster |
 | Lighting | ON / OFF | Quake's lighting on or off, in both modes |
 | Water | SOLID / SEE-THROUGH | See-through draws water and slime as a fine mesh over what is below |
@@ -129,7 +145,7 @@ so you see each change at once. The version number is at the top left.
 | Movement | WALK / FLY | Fly mode has no gravity: B goes up, C goes down |
 | Controls... | | Button layout, look up/down inverted, Defaults |
 | Analogue pad... | | Stick layout, turn speed (90-360°/s), look speed (60-240°/s), inverted look, dead zone, throttle use, trigger and button assignments; the bottom line shows what is plugged into port 1 |
-| Demo (bot plays) | OFF / PLAYING | A bot plays E1M1 to the exit, then the attract demo returns. Turn it off to take over where it is |
+| Demo (bot plays) | OFF / PLAYING | A bot plays E1M1 to the exit (when the cartridge starts with E1M1). Turn it off to take over where it is |
 | Resume | | Back to the game |
 
 Dead monsters teleport away silently, in a burst of particles, a second
@@ -137,7 +153,8 @@ after they land, to keep the frame rate up.
 
 ## Speed
 
-On the cycle model of the hardware (see docs/TECHNICAL.md), full screen:
+On the cycle model of the hardware (see docs/TECHNICAL.md), full screen
+(measured on 0.6 cartridges with E1M1-E1M3):
 E1M1 runs at about 16 fps textured and 28 flat; E1M3, the heaviest level,
 at about 7 fps textured over the attract demo and 16 flat. The game starts
 at 70% screen size, where E1M3's attract demo runs at about 12 fps
